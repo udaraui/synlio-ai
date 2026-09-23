@@ -1,0 +1,59 @@
+name: Build and Deploy to Azure Container Apps - AI App
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+env:
+  ACR_NAME: "synlioacr"
+  ACA_NAME: "synlioaicon"
+  RESOURCE_GROUP: "Synlio"
+  IMAGE_NAME: "synlioai"
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Login to ACR
+        run: |
+          az acr login --name ${{ env.ACR_NAME }} --resource-group ${{ env.RESOURCE_GROUP }}
+
+      - name: Build and Push Docker Image
+        id: build_image
+        run: |
+          ACR_LOGIN_SERVER=$(az acr show --name ${{ env.ACR_NAME }} --resource-group ${{ env.RESOURCE_GROUP }} --query loginServer --output tsv)
+          
+          FULL_IMAGE_NAME="$ACR_LOGIN_SERVER/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          LATEST_IMAGE_NAME="$ACR_LOGIN_SERVER/${{ env.IMAGE_NAME }}:latest"
+          
+          docker build -t $FULL_IMAGE_NAME .
+          
+          docker push $FULL_IMAGE_NAME
+          docker tag $FULL_IMAGE_NAME $LATEST_IMAGE_NAME
+          docker push $LATEST_IMAGE_NAME
+          
+          echo "ACR_LOGIN_SERVER=$ACR_LOGIN_SERVER" >> $GITHUB_ENV
+          echo "FULL_IMAGE_NAME=$FULL_IMAGE_NAME" >> $GITHUB_ENV
+
+      - name: Deploy to Azure Container App
+        uses: azure/container-apps-deploy-action@v2
+        with:
+          resourceGroup: ${{ env.RESOURCE_GROUP }}
+          containerAppName: ${{ env.ACA_NAME }}
+          imageToDeploy: ${{ env.FULL_IMAGE_NAME }}
+          targetPort: 8000
