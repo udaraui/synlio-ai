@@ -1,0 +1,248 @@
+version: "1.0.0"
+description: "Centralized semantic layer for Synlio AI — single source of truth for all Synalytics modules."
+
+# ═══════════════════════════════════════════════════════════════════════
+# MODULES
+# ═══════════════════════════════════════════════════════════════════════
+modules:
+
+  # ─────────────────────────────────────────────────────────────────────
+  # PROJECT ANALYTICS
+  # ─────────────────────────────────────────────────────────────────────
+  project_analytics:
+    display_name: "Project Analytics"
+    description: >-
+      Project performance data including task completions, effort variance, schedule delays,
+      and overall health scores across companies, divisions, and task spaces.
+    domain_focus: >-
+      Project tracking, task completion rates, effort estimation vs actuals,
+      schedule adherence, and hierarchy progress.
+
+    tables:
+      - name: marts.vw_project_dashboard
+        description: >-
+          Aggregated project and task dashboard data. Represents project health, effort,
+          and schedule progress across hierarchies.
+        columns:
+          # ── Dimensions ──
+          - name: company_name
+            type: VARCHAR
+            description: "Company name"
+            filterable: true
+            filter_code: company
+          - name: division_name
+            type: VARCHAR
+            description: "Division or department name"
+            filterable: true
+            filter_code: division
+          - name: task_space_name
+            type: VARCHAR
+            description: "Task space or project grouping name"
+            filterable: true
+            filter_code: taskSpace
+          - name: hierarchy_level_configured_name
+            type: VARCHAR
+            description: "The configured name of the hierarchy level"
+          
+          # ── Time Dimensions ──
+          - name: earliest_start_date
+            type: DATE
+            description: "Earliest start date of tasks in this grouping"
+            time_dimension: true
+          - name: latest_planned_end
+            type: DATE
+            description: "Latest planned end date"
+            time_dimension: true
+          - name: latest_actual_end
+            type: DATE
+            description: "Latest actual end date"
+            time_dimension: true
+          
+          # ── Measures ──
+          - name: total_items
+            type: NUMBER
+            description: "Total number of tasks/items"
+          - name: completed_items
+            type: NUMBER
+            description: "Number of completed tasks"
+          - name: overdue_items
+            type: NUMBER
+            description: "Number of overdue tasks"
+          - name: effort_variance_hrs
+            type: NUMBER
+            description: "Difference between planned and actual effort in hours"
+          - name: schedule_delay_days
+            type: NUMBER
+            description: "Number of days the project is delayed behind schedule"
+          - name: avg_health_score
+            type: NUMBER
+            description: "Average health score of the project (0-100)"
+
+        filter_columns:
+          company: company_name
+          division: division_name
+          taskSpace: task_space_name
+
+    kpis:
+      completion_rate:
+        description: "Percentage of items completed"
+        formula: "SUM(completed_items) / NULLIF(SUM(total_items), 0) * 100"
+        depends_on: ["completed_items", "total_items"]
+        tags: ["Progress", "Projects"]
+      avg_schedule_delay:
+        description: "Average schedule delay in days"
+        formula: "AVG(schedule_delay_days)"
+        depends_on: ["schedule_delay_days"]
+        tags: ["Schedule", "Projects"]
+
+  # ─────────────────────────────────────────────────────────────────────
+  # RESOURCE ANALYTICS
+  # ─────────────────────────────────────────────────────────────────────
+  resource_analytics:
+    display_name: "Resource Analytics"
+    description: >-
+      Resource utilization, capacity, costs, and workload distributions across divisions.
+    domain_focus: >-
+      Resource capacity planning, utilization tracking, skill gaps, and cost analysis.
+
+    tables:
+      - name: marts.vw_resource_dashboard
+        description: >-
+          Aggregated resource metrics including active task counts, utilization percentages,
+          and cost analysis.
+        columns:
+          # ── Dimensions ──
+          - name: full_name
+            type: VARCHAR
+            description: "Resource full name"
+            filterable: true
+            filter_code: resource
+          - name: company_name
+            type: VARCHAR
+            description: "Company name"
+            filterable: true
+            filter_code: company
+          - name: division_name
+            type: VARCHAR
+            description: "Division or department name"
+            filterable: true
+            filter_code: division
+          - name: workload_status
+            type: VARCHAR
+            description: "Workload status (e.g., OVERLOADED, AVAILABLE)"
+            filterable: true
+            filter_code: workloadStatus
+
+          # ── Measures ──
+          - name: utilization_pct
+            type: NUMBER
+            description: "Utilization percentage of the resource"
+          - name: monthly_cost
+            type: NUMBER
+            description: "Monthly cost of the resource"
+          - name: active_task_count
+            type: NUMBER
+            description: "Number of active tasks assigned"
+          - name: overdue_task_count
+            type: NUMBER
+            description: "Number of overdue tasks assigned"
+
+        filter_columns:
+          company: company_name
+          division: division_name
+          resource: full_name
+          workloadStatus: workload_status
+
+    kpis:
+      average_utilization:
+        description: "Average resource utilization percentage"
+        formula: "AVG(utilization_pct)"
+        depends_on: ["utilization_pct"]
+        tags: ["Utilization", "Resources"]
+      total_monthly_cost:
+        description: "Total monthly cost of all resources"
+        formula: "SUM(monthly_cost)"
+        depends_on: ["monthly_cost"]
+        tags: ["Cost", "Resources"]
+
+  # ─────────────────────────────────────────────────────────────────────
+  # TICKET ANALYTICS
+  # ─────────────────────────────────────────────────────────────────────
+  ticket_analytics:
+    display_name: "Ticket Analytics"
+    description: >-
+      Helpdesk and ticketing metrics tracking resolution rates, SLA breaches,
+      ticket volumes, and response times.
+    domain_focus: >-
+      Support ticket volume, SLA tracking, resolution times, and support team performance.
+
+    tables:
+      - name: marts.vw_ticket_dashboard
+        description: >-
+          Aggregated ticketing data tracking volumes, SLAs, and resolution metrics.
+        columns:
+          # ── Dimensions ──
+          - name: ticket_space_name
+            type: VARCHAR
+            description: "Ticket space or board name"
+            filterable: true
+            filter_code: ticketSpace
+          - name: priority_name
+            type: VARCHAR
+            description: "Ticket priority level"
+            filterable: true
+            filter_code: priority
+          - name: status_name
+            type: VARCHAR
+            description: "Ticket status name"
+            filterable: true
+            filter_code: status
+          - name: queue_name
+            type: VARCHAR
+            description: "Queue name"
+            filterable: true
+            filter_code: queue
+            
+          # ── Time Dimensions ──
+          - name: created_date
+            type: DATE
+            description: "Date the ticket was created"
+            time_dimension: true
+            
+          # ── Measures ──
+          - name: ticket_count
+            type: NUMBER
+            description: "Total number of tickets"
+          - name: overdue_count
+            type: NUMBER
+            description: "Number of overdue tickets"
+          - name: resolved_count
+            type: NUMBER
+            description: "Number of resolved tickets"
+          - name: sla_response_breach_count
+            type: NUMBER
+            description: "Number of tickets breaching response SLA"
+          - name: avg_resolution_hrs
+            type: NUMBER
+            description: "Average resolution time in hours"
+          - name: resolution_rate_pct
+            type: NUMBER
+            description: "Percentage of tickets resolved"
+
+        filter_columns:
+          ticketSpace: ticket_space_name
+          priority: priority_name
+          status: status_name
+          queue: queue_name
+
+    kpis:
+      resolution_rate:
+        description: "Overall ticket resolution rate"
+        formula: "SUM(resolved_count) / NULLIF(SUM(ticket_count), 0) * 100"
+        depends_on: ["resolved_count", "ticket_count"]
+        tags: ["Resolution", "Tickets"]
+      total_sla_breaches:
+        description: "Total number of SLA response breaches"
+        formula: "SUM(sla_response_breach_count)"
+        depends_on: ["sla_response_breach_count"]
+        tags: ["SLA", "Tickets"]

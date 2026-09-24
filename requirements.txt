@@ -1,5 +1,10 @@
 fastapi
 uvicorn
 langgraph
+langchain
 langchain-core
 pydantic
+python-dotenv
+langchain-google-genai
+sqlalchemy
+psycopg2-binary
