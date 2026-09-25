@@ -83,6 +83,63 @@ modules:
           division: division_name
           taskSpace: task_space_name
 
+      - name: marts.vw_project_task_detail
+        description: >-
+          Detailed view of individual project tasks, providing granular data on statuses,
+          assignees, effort hours, scheduling, and hierarchy placement.
+        columns:
+          - name: task_code
+            type: VARCHAR
+            description: "Unique task identifier code"
+          - name: task_name
+            type: VARCHAR
+            description: "Name of the task"
+          - name: company_name
+            type: VARCHAR
+            description: "Company name"
+            filterable: true
+            filter_code: company
+          - name: task_space_name
+            type: VARCHAR
+            description: "Task space or project grouping name"
+            filterable: true
+            filter_code: taskSpace
+          - name: status_name
+            type: VARCHAR
+            description: "Current status of the task"
+            filterable: true
+            filter_code: status
+          - name: assignee_full_name
+            type: VARCHAR
+            description: "Full name of the assigned resource"
+            filterable: true
+            filter_code: assignee
+          - name: planned_start_date
+            type: DATE
+            description: "Planned start date for the task"
+            time_dimension: true
+          - name: planned_due_date
+            type: DATE
+            description: "Planned due date for the task"
+            time_dimension: true
+          - name: estimate_effort_hrs
+            type: NUMBER
+            description: "Estimated effort in hours"
+          - name: actual_effort_hrs
+            type: NUMBER
+            description: "Actual effort logged in hours"
+          - name: is_overdue
+            type: BOOLEAN
+            description: "Indicates whether the task is overdue"
+          - name: task_health_score
+            type: NUMBER
+            description: "Health score of the specific task"
+        filter_columns:
+          company: company_name
+          taskSpace: task_space_name
+          status: status_name
+          assignee: assignee_full_name
+
     kpis:
       completion_rate:
         description: "Percentage of items completed"
@@ -152,6 +209,43 @@ modules:
           division: division_name
           resource: full_name
           workloadStatus: workload_status
+
+      - name: marts.vw_resource_skill_gap
+        description: >-
+          Detailed view analyzing resource skill sets, utilization rates, and identifying
+          gaps between required counts and available resources.
+        columns:
+          - name: company_name
+            type: VARCHAR
+            description: "Company name"
+            filterable: true
+            filter_code: company
+          - name: skill_category_name
+            type: VARCHAR
+            description: "Category of the skill"
+          - name: skill_name
+            type: VARCHAR
+            description: "Specific skill name"
+          - name: resources_with_skill
+            type: NUMBER
+            description: "Number of resources possessing this skill"
+          - name: total_active_resources
+            type: NUMBER
+            description: "Total number of active resources"
+          - name: skill_utilization_pct
+            type: NUMBER
+            description: "Utilization percentage of the skill"
+          - name: required_count
+            type: NUMBER
+            description: "Required number of resources with this skill"
+          - name: gap_count
+            type: NUMBER
+            description: "Gap between required and available resources"
+          - name: gap_status
+            type: VARCHAR
+            description: "Status of the gap (e.g., Shortage, Sufficient)"
+        filter_columns:
+          company: company_name
 
     kpis:
       average_utilization:
@@ -234,6 +328,100 @@ modules:
           priority: priority_name
           status: status_name
           queue: queue_name
+
+      - name: marts.vw_ticket_recent_list
+        description: >-
+          Detailed list of recent tickets with granular information on assignees, statuses,
+          service level agreements (SLAs), and actual vs planned effort.
+        columns:
+          - name: ticket_code
+            type: VARCHAR
+            description: "Unique ticket identifier code"
+          - name: ticket_name
+            type: VARCHAR
+            description: "Name or subject of the ticket"
+          - name: company_name
+            type: VARCHAR
+            description: "Company name"
+            filterable: true
+            filter_code: company
+          - name: ticket_space_name
+            type: VARCHAR
+            description: "Ticket space or board name"
+            filterable: true
+            filter_code: ticketSpace
+          - name: status_name
+            type: VARCHAR
+            description: "Current ticket status"
+            filterable: true
+            filter_code: status
+          - name: priority_name
+            type: VARCHAR
+            description: "Priority of the ticket"
+            filterable: true
+            filter_code: priority
+          - name: assignee_name
+            type: VARCHAR
+            description: "Full name of the assignee"
+          - name: is_overdue
+            type: BOOLEAN
+            description: "Whether the ticket is overdue"
+          - name: sla_response_status
+            type: VARCHAR
+            description: "Status of the SLA response time"
+          - name: sla_resolution_status
+            type: VARCHAR
+            description: "Status of the SLA resolution time"
+          - name: created_date
+            type: DATE
+            description: "Date the ticket was created"
+            time_dimension: true
+          - name: resolved_at
+            type: DATE
+            description: "Timestamp when the ticket was resolved"
+            time_dimension: true
+        filter_columns:
+          company: company_name
+          ticketSpace: ticket_space_name
+          status: status_name
+          priority: priority_name
+
+      - name: marts.vw_ticket_workload
+        description: >-
+          Workload analysis per assignee, identifying how many tickets are assigned,
+          allocated effort, overdue status, and total capacity.
+        columns:
+          - name: company_name
+            type: VARCHAR
+            description: "Company name"
+            filterable: true
+            filter_code: company
+          - name: ticket_space_name
+            type: VARCHAR
+            description: "Ticket space name"
+            filterable: true
+            filter_code: ticketSpace
+          - name: assignee_name
+            type: VARCHAR
+            description: "Name of the assigned resource"
+          - name: assigned_ticket_count
+            type: NUMBER
+            description: "Total number of tickets assigned to the resource"
+          - name: allocated_effort_hrs
+            type: NUMBER
+            description: "Total allocated effort in hours"
+          - name: overdue_count
+            type: NUMBER
+            description: "Number of overdue tickets assigned"
+          - name: utilization_pct
+            type: NUMBER
+            description: "Capacity utilization percentage"
+          - name: workload_status
+            type: VARCHAR
+            description: "Current workload status (e.g., OVERLOADED)"
+        filter_columns:
+          company: company_name
+          ticketSpace: ticket_space_name
 
     kpis:
       resolution_rate:

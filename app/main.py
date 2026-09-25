@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import PlainTextResponse
 from app.api.routes import router as chat_router
 from app.agent.agent import insight_agent
 from app.api.models import QueryRequest, QueryResponse
@@ -7,9 +8,9 @@ app = FastAPI(title="Cubix Analytics API")
 
 app.include_router(chat_router)
 
-@app.get("/")
+@app.get("/", response_class=PlainTextResponse)
 def read_root():
-    return {"message": "hello synlio ai"}
+    return "hello synlio AI!"
 
 @app.post("/analyze", response_model=QueryResponse)
 async def analyze_data(request: QueryRequest):
