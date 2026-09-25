@@ -28,7 +28,7 @@ COPY . .
 ENV PORT=8000
 
 # Expose port
-EXPOSE $PORT
+EXPOSE 8000
 
 # Start app
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port $PORT"]
+CMD ["sh", "-c", "/opt/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port $PORT"]
