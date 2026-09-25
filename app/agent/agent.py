@@ -13,7 +13,7 @@ from sqlalchemy import create_engine, text
 # Load environment variables from .env file
 load_dotenv()
 
-api_key = os.getenv("OPENAI_API_KEY")
+api_key = os.getenv("LLM_API_KEY")
 pg_db_url = os.getenv("PG_DB_URL")
 
 # --- Step 1: State and Tools ---
