@@ -3,6 +3,9 @@ name: Build and Deploy to Azure Container Apps - AI App
 on:
   push:
     branches: [ "main" ]
+    paths:
+      - '**'
+      - '.github/workflows/deploy-synlio-ai.yml'
   workflow_dispatch:
 
 env:
