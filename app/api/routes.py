@@ -20,6 +20,6 @@ async def chat(request: ChatRequest):
             print(f"--- INTERNAL SERVER ERROR ---")
             traceback.print_exc()
             yield f"__REPLACE__Error occurred"
-            yield f"\n\n**Internal Server Error:**\n```text\n{e}\n```\n"
+            yield f"\n\nI encountered an unexpected issue while trying to process your request. Please try rephrasing or trying again later."
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

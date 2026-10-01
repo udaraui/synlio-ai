@@ -59,9 +59,8 @@ def create_graph(llm: ChatOpenAI):
             elif domain == "resource_analytics":
                 return "resource_agent"
             return "project_agent"
-        
-        # Short-circuit before formatter for testing
-        return END
+        # return END
+        return "formatter"
     builder.add_conditional_edges("orchestrator", route_domain)
     
     def route_worker_action(state: AgentState):

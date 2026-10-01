@@ -86,11 +86,6 @@ def get_worker_prompt(domain_name: str) -> str:
 
 {guard_rails}
 
-Important: You must parse the user's prompt yourself to identify any specific filters (like names, companies, statuses, dates) that you should filter by.
-You MUST constrain your SQL to use only the provided tables in the schema below, and you MUST apply the user's parameters as filters in your WHERE clause. Ensure you map the user's request logically to the correct actual column `name` (e.g. map 'assignee_full_name' or 'assignee' to `assignee_full_name`, map 'company' to `company_name`) according to the Semantic Layer Schema below.
-
-CRITICAL SQL RULE: For ANY fields containing names (such as assignee_full_name, assignee_name, company_name, project_name), you MUST use `ILIKE '%term%'` instead of `=`. Example: `assignee_name ILIKE '%Punsara%'`. NEVER use exact `=` for names!
-
 SEMANTIC LAYER SCHEMA (ONLY FOR {domain_name.upper()}):
 {domain_schema_str}
 
