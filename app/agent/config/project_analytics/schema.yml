@@ -1,0 +1,111 @@
+display_name: Project Analytics
+description: Project performance data including task completions, effort variance,
+  schedule delays, and overall health scores across companies, divisions, and task
+  spaces.
+domain_focus: Project tracking, task completion rates, effort estimation vs actuals,
+  schedule adherence, and hierarchy progress.
+tables:
+- name: marts.vw_project_dashboard
+  description: Aggregated project and task dashboard data. Represents project health,
+    effort, and schedule progress across hierarchies.
+  columns:
+  - name: company_name
+    type: VARCHAR
+    filterable: true
+    filter_code: company_name
+  - name: division_name
+    type: VARCHAR
+    filterable: true
+    filter_code: division_name
+  - name: task_space_name
+    type: VARCHAR
+    filterable: true
+    filter_code: task_space_name
+  - name: hierarchy_level_configured_name
+    type: VARCHAR
+  - name: earliest_start_date
+    type: DATE
+    time_dimension: true
+  - name: latest_planned_end
+    type: DATE
+    time_dimension: true
+  - name: latest_actual_end
+    type: DATE
+    time_dimension: true
+  - name: total_items
+    type: NUMBER
+  - name: completed_items
+    type: NUMBER
+  - name: overdue_items
+    type: NUMBER
+  - name: effort_variance_hrs
+    type: NUMBER
+  - name: schedule_delay_days
+    type: NUMBER
+  - name: avg_health_score
+    type: NUMBER
+  filter_columns:
+    company_name: company_name
+    division_name: division_name
+    task_space_name: task_space_name
+- name: marts.vw_project_task_detail
+  description: Detailed view of individual project tasks, providing granular data
+    on statuses, assignees, effort hours, scheduling, and hierarchy placement.
+  columns:
+  - name: task_code
+    type: VARCHAR
+  - name: task_name
+    type: VARCHAR
+  - name: company_name
+    type: VARCHAR
+    filterable: true
+    filter_code: company_name
+  - name: task_space_name
+    type: VARCHAR
+    filterable: true
+    filter_code: task_space_name
+  - name: status_base
+    type: VARCHAR
+    filterable: true
+    filter_code: status_base
+  - name: assignee_full_name
+    type: VARCHAR
+    filterable: true
+    filter_code: assignee_full_name
+  - name: planned_start_date
+    type: DATE
+    time_dimension: true
+  - name: planned_due_date
+    type: DATE
+    time_dimension: true
+  - name: estimate_effort_hrs
+    type: NUMBER
+  - name: actual_effort_hrs
+    type: NUMBER
+  - name: is_overdue
+    type: INTEGER
+  - name: task_health_score
+    type: NUMBER
+  filter_columns:
+    company_name: company_name
+    task_space_name: task_space_name
+    status_base: status_base
+    assignee_full_name: assignee_full_name
+kpis:
+  completion_rate:
+    description: Percentage of items completed
+    formula: SUM(completed_items) / NULLIF(SUM(total_items), 0) * 100
+    depends_on:
+    - completed_items
+    - total_items
+    tags:
+    - Progress
+    - Projects
+  avg_schedule_delay:
+    description: Average schedule delay in days
+    formula: AVG(schedule_delay_days)
+    depends_on:
+    - schedule_delay_days
+    tags:
+    - Schedule
+    - Projects

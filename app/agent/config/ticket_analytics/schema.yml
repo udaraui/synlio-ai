@@ -1,0 +1,90 @@
+display_name: Ticket Analytics
+description: Helpdesk and ticketing metrics tracking resolution rates, SLA breaches,
+  ticket volumes, and response times.
+domain_focus: Support ticket volume, SLA tracking, resolution times, and support team
+  performance.
+tables:
+- name: marts.vw_ticket_dashboard
+  description: Aggregated ticketing data tracking volumes, SLAs, and resolution metrics.
+  columns:
+  - name: ticket_space_name
+    type: VARCHAR
+    filterable: true
+    filter_code: ticket_space_name
+  - name: priority_name
+    type: VARCHAR
+    filterable: true
+    filter_code: priority_name
+  - name: status_base
+    type: VARCHAR
+    filterable: true
+    filter_code: status_base
+  - name: queue_name
+    type: VARCHAR
+    filterable: true
+    filter_code: queue_name
+  - name: created_date
+    type: DATE
+    time_dimension: true
+  - name: ticket_count
+    type: NUMBER
+  - name: overdue_count
+    type: NUMBER
+  - name: resolved_count
+    type: NUMBER
+  - name: sla_response_breach_count
+    type: NUMBER
+  - name: avg_resolution_hrs
+    type: NUMBER
+  - name: resolution_rate_pct
+    type: NUMBER
+  filter_columns:
+    ticket_space_name: ticket_space_name
+    priority_name: priority_name
+    status_base: status_base
+    queue_name: queue_name
+- name: marts.vw_ticket_workload
+  description: Workload analysis per assignee, identifying how many tickets are assigned,
+    allocated effort, overdue status, and total capacity.
+  columns:
+  - name: company_name
+    type: VARCHAR
+    filterable: true
+    filter_code: company_name
+  - name: ticket_space_name
+    type: VARCHAR
+    filterable: true
+    filter_code: ticket_space_name
+  - name: assignee_name
+    type: VARCHAR
+  - name: assigned_ticket_count
+    type: NUMBER
+  - name: allocated_effort_hrs
+    type: NUMBER
+  - name: overdue_count
+    type: NUMBER
+  - name: utilization_pct
+    type: NUMBER
+  - name: workload_status
+    type: VARCHAR
+  filter_columns:
+    company_name: company_name
+    ticket_space_name: ticket_space_name
+kpis:
+  resolution_rate:
+    description: Overall ticket resolution rate
+    formula: SUM(resolved_count) / NULLIF(SUM(ticket_count), 0) * 100
+    depends_on:
+    - resolved_count
+    - ticket_count
+    tags:
+    - Resolution
+    - Tickets
+  total_sla_breaches:
+    description: Total number of SLA response breaches
+    formula: SUM(sla_response_breach_count)
+    depends_on:
+    - sla_response_breach_count
+    tags:
+    - SLA
+    - Tickets

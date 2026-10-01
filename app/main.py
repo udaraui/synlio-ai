@@ -15,7 +15,7 @@ def read_root():
 @app.post("/analyze", response_model=QueryResponse)
 async def analyze_data(request: QueryRequest):
     if not insight_agent:
-        raise HTTPException(status_code=500, detail="Gemini API Key is not set or agent failed to initialize.")
+        raise HTTPException(status_code=500, detail="LLM API Key is not set or agent failed to initialize.")
         
     # Run the insight agent with the user's query
     result = await insight_agent.arun(request.query)

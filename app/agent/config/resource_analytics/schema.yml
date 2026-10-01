@@ -1,0 +1,82 @@
+display_name: Resource Analytics
+description: Resource utilization, capacity, costs, and workload distributions across
+  divisions.
+domain_focus: Resource capacity planning, utilization tracking, skill gaps, and cost
+  analysis.
+tables:
+- name: marts.vw_resource_dashboard
+  description: Aggregated resource metrics including active task counts, utilization
+    percentages, and cost analysis.
+  columns:
+  - name: full_name
+    type: VARCHAR
+    filterable: true
+    filter_code: full_name
+  - name: company_name
+    type: VARCHAR
+    filterable: true
+    filter_code: company_name
+  - name: division_name
+    type: VARCHAR
+    filterable: true
+    filter_code: division_name
+  - name: workload_status
+    type: VARCHAR
+    filterable: true
+    filter_code: workload_status
+  - name: utilization_pct
+    type: NUMBER
+  - name: monthly_cost
+    type: NUMBER
+  - name: active_task_count
+    type: NUMBER
+  - name: overdue_task_count
+    type: NUMBER
+  filter_columns:
+    company_name: company_name
+    division_name: division_name
+    full_name: full_name
+    workload_status: workload_status
+- name: marts.vw_resource_skill_gap
+  description: Detailed view analyzing resource skill sets, utilization rates, and
+    identifying gaps between required counts and available resources.
+  columns:
+  - name: company_name
+    type: VARCHAR
+    filterable: true
+    filter_code: company_name
+  - name: skill_category_name
+    type: VARCHAR
+  - name: skill_name
+    type: VARCHAR
+  - name: resources_with_skill
+    type: NUMBER
+  - name: total_active_resources
+    type: NUMBER
+  - name: skill_utilization_pct
+    type: NUMBER
+  - name: required_count
+    type: NUMBER
+  - name: gap_count
+    type: NUMBER
+  - name: gap_status
+    type: VARCHAR
+  filter_columns:
+    company_name: company_name
+kpis:
+  average_utilization:
+    description: Average resource utilization percentage
+    formula: AVG(utilization_pct)
+    depends_on:
+    - utilization_pct
+    tags:
+    - Utilization
+    - Resources
+  total_monthly_cost:
+    description: Total monthly cost of all resources
+    formula: SUM(monthly_cost)
+    depends_on:
+    - monthly_cost
+    tags:
+    - Cost
+    - Resources

@@ -10,7 +10,7 @@ router = APIRouter()
 @router.post("/chat")
 async def chat(request: ChatRequest):
     if not insight_agent:
-        raise HTTPException(status_code=500, detail="Gemini API Key is not set or agent failed to initialize.")
+        raise HTTPException(status_code=500, detail="LLM API Key is not set or agent failed to initialize.")
         
     async def event_stream():
         try:
@@ -19,6 +19,7 @@ async def chat(request: ChatRequest):
         except Exception as e:
             print(f"--- INTERNAL SERVER ERROR ---")
             traceback.print_exc()
-            yield f"Error: {e}"
+            yield f"__REPLACE__Error occurred"
+            yield f"\n\n**Internal Server Error:**\n```text\n{e}\n```\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
