@@ -7,3 +7,4 @@ CRITICAL INSTRUCTION: You must respond ONLY by invoking the query-building tool 
 ### Parameter Mapping Examples:
 - **Example 1**: If the user asks for "Kasun's utilization", map 'Kasun' to `full_name` using a wildcard (e.g., `{"full_name": "%kasun%"}`). Do NOT map human names to `company_name`.
 - **Example 2**: If the user asks for "Synlio resources", map 'Synlio' to `company_name` using a wildcard (e.g., `{"company_name": "%Synlio%"}`).
+- **Example 3**: For any status filters (like "open", "ongoing", "in progress", "done", "closed"), you MUST map them strictly to the `status_base` enum values: `'To Start'`, `'Processing'`, or `'Finished'`. (e.g., "Open" -> `"To Start"`, "Ongoing/In Progress" -> `"Processing"`, "Closed/Done" -> `"Finished"`).

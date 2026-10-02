@@ -112,8 +112,8 @@ def make_worker_node(llm: ChatOpenAI, domain: str, tool_func):
         if domain_results:
             system_content += f"\n\nPREVIOUS DOMAIN RESULTS: {json.dumps(domain_results)}"
         
-        # Bind the specialized tool
-        llm_with_tools = llm.bind_tools([tool_func])
+        # Bind the specialized tool and force it to be called
+        llm_with_tools = llm.bind_tools([tool_func], tool_choice="any")
         
         # Extract only the last user query to save tokens
         human_msgs = [m for m in state.get("messages", []) if isinstance(m, HumanMessage)]
@@ -158,6 +158,7 @@ def make_formatter_node(llm: ChatOpenAI):
             print()
             return {"messages": [response]}
         
+        # print(f"DEBUG - Domain Results going to Formatter: {json.dumps(domain_results)[:500]}")
         content = FORMATTER_PROMPT + f"\n\nUSER QUERY: {user_query}\n\nDOMAIN RESULTS: {json.dumps(domain_results)}"
         
         response = await llm.ainvoke([

@@ -16,8 +16,13 @@ def advance_step_node(state: AgentState):
     
     if current < len(plan) and last_message and last_message.type == "tool":
         domain = plan[current]
-        domain_results[domain] = last_message.content
-        
+        try:
+            # Parse the JSON string so it doesn't get double-escaped later
+            import json
+            domain_results[domain] = json.loads(last_message.content)
+        except Exception:
+            domain_results[domain] = last_message.content
+            
     return {
         "current_step": current + 1,
         "domain_results": domain_results
