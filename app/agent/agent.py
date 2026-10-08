@@ -17,17 +17,25 @@ class AgentResult(BaseModel):
 class InsightAgent:
     def __init__(self, key: str):
         self.llm = ChatOpenAI(
-            model="nvidia/nemotron-3-nano-30b-a3b",
+            model="openai/gpt-4o-mini",
+            # model="nvidia/nemotron-3-nano-30b-a3b",
             # model="typesafe/jev-1.13",
-            # model="openai/gpt-4o-mini",
             api_key=key,
             temperature=0,
             base_url="https://openrouter.ai/api/v1",
             streaming=True
         )
         
+        self.orchestrator_llm = ChatOpenAI(
+            model="typesafe/jev-1.13",
+            api_key=os.getenv("JEFF_API_KEY", key),
+            temperature=0,
+            base_url="https://openrouter.ai/api/v1",
+            streaming=True
+        )
+        
         # Build and compile the graph
-        self.agent_executor = create_graph(self.llm)
+        self.agent_executor = create_graph(self.llm, self.orchestrator_llm)
 
     async def arun(self, query: str) -> AgentResult:
         response = await self.agent_executor.ainvoke({"messages": [("user", query)]})
@@ -58,14 +66,11 @@ class InsightAgent:
                             plan = node_state.get("execution_plan", [])
                             if plan:
                                 yield "__REPLACE__Figuring out where to look"
-                        elif node_name.endswith("_agent"):
-                            domain_map = {
-                                "project_agent": "projects",
-                                "ticket_agent": "tickets",
-                                "resource_agent": "resources"
-                            }
-                            friendly_name = domain_map.get(node_name, "our database")
-                            yield f"__REPLACE__Looking through {friendly_name}"
+                        elif node_name == "parallel_workers":
+                            plan = node_state.get("execution_plan", [])
+                            if plan:
+                                domains = [d.replace('_analytics', 's') for d in plan]
+                                yield f"__REPLACE__Looking through {', '.join(domains)}"
                 elif mode == "messages":
                     chunk, metadata = payload
                     if getattr(chunk, "type", "") == "tool" and chunk.content:
@@ -96,8 +101,7 @@ class InsightAgent:
             else:
                 yield "__FINAL__Execution completed with no data."
         else:
-            print("\n")
-            
+            pass
         elapsed = time.time() - start_time
         total_tokens = global_token_usage.get()[0]
         print(f"\n[REQUEST TOTALS] Time: {elapsed:.2f}s | Tokens: {total_tokens}\n")

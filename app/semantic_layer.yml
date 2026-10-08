@@ -91,10 +91,26 @@ modules:
             type: VARCHAR
             filterable: true
             filter_code: status_base
+          - name: status_name
+            type: VARCHAR
+          - name: status_color
+            type: VARCHAR
+          - name: severity_name
+            type: VARCHAR
+          - name: severity_color
+            type: VARCHAR
+          - name: hierarchy_level_name
+            type: VARCHAR
+          - name: hierarchy_level_color
+            type: VARCHAR
+          - name: hierarchy_level_icon
+            type: VARCHAR
           - name: assignee_full_name
             type: VARCHAR
             filterable: true
             filter_code: assignee_full_name
+          - name: assignee_profile_pic
+            type: VARCHAR
           - name: planned_start_date
             type: DATE
             time_dimension: true
@@ -238,14 +254,28 @@ modules:
             type: VARCHAR
             filterable: true
             filter_code: ticket_space_name
+          - name: ticket_type_name
+            type: VARCHAR
+          - name: ticket_type_icon
+            type: VARCHAR
+          - name: ticket_type_color
+            type: VARCHAR
           - name: priority_name
             type: VARCHAR
             filterable: true
             filter_code: priority_name
+          - name: priority_icon
+            type: VARCHAR
+          - name: priority_color
+            type: VARCHAR
           - name: status_base
             type: VARCHAR
             filterable: true
             filter_code: status_base
+          - name: status_icon
+            type: VARCHAR
+          - name: status_color
+            type: VARCHAR
           - name: queue_name
             type: VARCHAR
             filterable: true

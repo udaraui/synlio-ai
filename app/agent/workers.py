@@ -58,36 +58,99 @@ def print_usage(node_name: str, response, elapsed: float = 0.0):
         print(f"Error logging usage: {e}")
     return total
 
-class OrchestrationPlan(BaseModel):
-    execution_plan: list[Literal["project_analytics", "ticket_analytics", "resource_analytics"]] = Field(
-        description="The sequence of domains/modules to route this query to, in order, based on the semantic layer."
-    )
-
 def make_orchestrator_node(llm: ChatOpenAI):
     async def orchestrator_node(state: AgentState, config: RunnableConfig):
         messages = state.get("messages", [])
-        last_message = messages[-1].content if messages else ""
-        # Raw text output for maximum speed (no JSON or Pydantic overhead)
         try:
+            import time
+            import os
+            import httpx
+            
             print("[ORCHESTRATOR]=======================================================")
-            print("Analyzing prompt and extracting semantic context...")
+            print("Analyzing prompt and extracting semantic context with Jeff (via OpenRouter Decisions API)...")
             start_time = time.time()
-            result = await llm.ainvoke([
-                SystemMessage(content=ORCHESTRATOR_SYSTEM_PROMPT),
-                HumanMessage(content=str(last_message))
-            ], config=config)
             
-            raw_text = result.content.strip()
+            # Reconstruct the conversation history
+            chat_history = f"SYSTEM INSTRUCTIONS: {ORCHESTRATOR_SYSTEM_PROMPT}\n\n"
+            for m in messages:
+                role = "User" if m.type == "human" else "Assistant"
+                chat_history += f"{role}: {m.content}\n"
+                
+            # Both keys are the same, just use the main LLM API key
+            api_key = os.getenv("LLM_API_KEY")
+            if not api_key:
+                print("WARNING: LLM_API_KEY is not set.")
             
-            # Simple text parsing: e.g. 'project_analytics, ticket_analytics'
+            # OpenRouter requires hitting /api/alpha/decisions for jev-1.13
+            payload = {
+                "model": "typesafe/jev-1.13",
+                "state": chat_history,
+                "questions": {
+                    "domain": {
+                        "type": "choice",
+                        "instructions": "Which specific domains are needed to handle the user's latest request?",
+                        "criteria": {
+                            "project_analytics": "Questions about projects, budgets, or timelines",
+                            "ticket_analytics": "Questions about tasks, issues, and bugs",
+                            "resource_analytics": "Questions about people, allocation, or availability",
+                            "none": "Unrelated or general queries"
+                        }
+                    },
+                    "frustration_level": {
+                        "type": "choice",
+                        "instructions": "What is the user's frustration level based on their tone?",
+                        "criteria": {
+                            "high": "User is angry, very upset, or demanding",
+                            "medium": "User is annoyed or impatient",
+                            "low": "User is slightly frustrated or confused",
+                            "none": "User is calm, polite, or neutral"
+                        }
+                    }
+                }
+            }
+            
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    "https://openrouter.ai/api/alpha/decisions",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json"
+                    },
+                    json=payload,
+                    timeout=30.0
+                )
+                
+            if resp.status_code != 200:
+                raise Exception(f"OpenRouter API Error: {resp.status_code} - {resp.text}")
+                
+            result_data = resp.json()
+            answers = result_data.get("answers", {})
+            
+            domain_answer = answers.get("domain", {})
+            domain_choice = domain_answer.get("choice", "none")
+            domain_probs = domain_answer.get("probabilities", {})
+            
+            print(f"Domain Choice: {domain_choice} (Confidence: {domain_answer.get('confidence', 0):.2f})")
+            print(f"Domain Probabilities: {domain_probs}")
+            
             domains = []
-            for d in ["project_analytics", "ticket_analytics", "resource_analytics"]:
-                if d in raw_text:
-                    domains.append(d)
+            for dom, prob in domain_probs.items():
+                if dom != "none" and prob > 0.25:
+                    domains.append(dom)
+                    
+            if not domains and domain_choice != "none":
+                domains = [domain_choice]
+                
+            frust_answer = answers.get("frustration_level", {})
+            frustration = frust_answer.get("choice", "none")
             
-            print(f"Execution Plan: {domains}")
+            print(f"Frustration Choice: {frust_answer.get('choice')} (Confidence: {frust_answer.get('confidence', 0):.2f})")
+            print(f"Frustration Probabilities: {frust_answer.get('probabilities', {})}")
+            print(f"User Frustration Level: {frustration.upper()}")
+            
+            print(f"Execution Plan (TypeSafe Choice): {domains}")
             elapsed = time.time() - start_time
-            print_usage("ORCHESTRATOR", result, elapsed)
+            print(f"Time: {elapsed:.2f}s")
             print()
             
             return {
@@ -96,7 +159,17 @@ def make_orchestrator_node(llm: ChatOpenAI):
                 "domain_results": {}
             }
         except Exception as e:
-            print(f"Error parsing orchestration plan: {e}")
+            error_str = str(e)
+            print(f"Error parsing orchestration plan: {error_str}")
+            
+            if "401" in error_str or "expired" in error_str.lower() or "unauthorized" in error_str.lower():
+                return {
+                    "execution_plan": [],
+                    "current_step": 0,
+                    "domain_results": {},
+                    "error_message": "The AI service is currently unavailable due to an API key or authentication error. Please check the backend console for details."
+                }
+            
             return {
                 "execution_plan": [],
                 "current_step": 0,
@@ -124,20 +197,31 @@ def make_worker_node(llm: ChatOpenAI, domain: str, tool_func):
         print(f"[{domain.upper()}]==================================================")
         print("Generating query...")
         start_time = time.time()
-        response = await llm_with_tools.ainvoke(messages, config=config)
-        elapsed = time.time() - start_time
         
-        # Log the output tool calls or response
-        if getattr(response, "tool_calls", None):
-            print(f"Tool Called: {response.tool_calls[0]['name']}")
-            print(f"Arguments: {response.tool_calls[0]['args']}")
-        else:
-            print(f"Output: {response.content[:200]}...")
+        try:
+            response = await llm_with_tools.ainvoke(messages, config=config)
+            elapsed = time.time() - start_time
             
-        print_usage(domain, response, elapsed)
-        print()
-        
-        return {"messages": [response]}
+            # Log the output tool calls or response
+            if getattr(response, "tool_calls", None):
+                print(f"Tool Called: {response.tool_calls[0]['name']}")
+                import json
+                print(f"Arguments: {json.dumps(response.tool_calls[0]['args'], indent=2)}")
+            else:
+                print(f"Output: {response.content}")
+                
+            print_usage(domain, response, elapsed)
+            print()
+            
+            return {"messages": [response]}
+        except Exception as e:
+            error_str = str(e)
+            print(f"Error in {domain} worker: {error_str}")
+            if "401" in error_str or "expired" in error_str.lower() or "unauthorized" in error_str.lower():
+                msg = AIMessage(content="The AI service is currently unavailable due to an API key or authentication error. Please check the backend console for details.")
+                return {"messages": [msg], "error_message": msg.content}
+            msg = AIMessage(content=f"An error occurred in the {domain} worker. Please try again.")
+            return {"messages": [msg]}
     return worker_node
 
 def make_formatter_node(llm: ChatOpenAI):
@@ -151,6 +235,12 @@ def make_formatter_node(llm: ChatOpenAI):
         print("Formatting final response...")
         start_time = time.time()
         
+        if state.get("error_message"):
+            response = AIMessage(content=state["error_message"])
+            print(f"Completed! (Error: {state['error_message']})")
+            print()
+            return {"messages": [response]}
+        
         if not execution_plan and not domain_results:
             response_text = "I'm sorry, I couldn't understand your request or map it to a specific analytics domain. Could you please rephrase?"
             response = AIMessage(content=response_text)
@@ -161,15 +251,23 @@ def make_formatter_node(llm: ChatOpenAI):
         # print(f"DEBUG - Domain Results going to Formatter: {json.dumps(domain_results)[:500]}")
         content = FORMATTER_PROMPT + f"\n\nUSER QUERY: {user_query}\n\nDOMAIN RESULTS: {json.dumps(domain_results)}"
         
-        response = await llm.ainvoke([
-            SystemMessage(content=content),
-            HumanMessage(content=str(user_query))
-        ], config=config)
-        elapsed = time.time() - start_time
-        
-        print("Completed!")
-        print_usage("FORMATTER", response, elapsed)
-        print()
-        
-        return {"messages": [response]}
+        try:
+            response = await llm.ainvoke([
+                SystemMessage(content=content),
+                HumanMessage(content=str(user_query))
+            ], config=config)
+            elapsed = time.time() - start_time
+            
+            print("Completed!")
+            print_usage("FORMATTER", response, elapsed)
+            
+            return {"messages": [response]}
+        except Exception as e:
+            error_str = str(e)
+            print(f"Error in formatter: {error_str}")
+            if "401" in error_str or "expired" in error_str.lower() or "unauthorized" in error_str.lower():
+                response = AIMessage(content="The AI service is currently unavailable due to an API key or authentication error. Please check the backend console for details.")
+                return {"messages": [response]}
+            response = AIMessage(content="An error occurred while formatting the response. Please try again.")
+            return {"messages": [response]}
     return formatter_node
