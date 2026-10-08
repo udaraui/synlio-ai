@@ -90,8 +90,8 @@ def make_orchestrator_node(llm: ChatOpenAI):
                         "type": "choice",
                         "instructions": "Which specific domains are needed to handle the user's latest request?",
                         "criteria": {
-                            "project_analytics": "Questions about projects, budgets, or timelines",
-                            "ticket_analytics": "Questions about tasks, issues, and bugs",
+                            "project_analytics": "Questions about projects, tasks and timelines",
+                            "ticket_analytics": "Questions about tickets, issues, and bugs",
                             "resource_analytics": "Questions about people, allocation, or availability",
                             "none": "Unrelated or general queries"
                         }
