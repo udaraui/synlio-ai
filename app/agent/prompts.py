@@ -102,6 +102,7 @@ def get_worker_prompt(domain_name: str) -> str:
 CRITICAL RULES FOR METADATA COLUMNS:
 When querying for status, severity, ticket type, or hierarchy levels, you MUST SELECT the associated `_name`, `_color`, and `_icon` columns (e.g. `status_name`, `status_color`) ONLY IF they explicitly exist in the schema for that specific table/view. Do not assume all entities have an `_icon` or `_color` column; check the schema first.
 NEVER return `_base` columns (like `status_base`) in the final output; ONLY use `_base` columns for WHERE clause filtering.
+When the user filters by an organization or brand like "Synlio", you MUST map this to the `company_name` column, NOT to `task_space_name` or `ticket_space_name`.
 
 SEMANTIC LAYER SCHEMA (ONLY FOR {domain_name.upper()}):
 {domain_schema_str}
