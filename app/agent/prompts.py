@@ -29,37 +29,29 @@ def build_orchestrator_context() -> str:
         context.append("-" * 30)
     return "\n".join(context)
 
+def get_orchestrator_config():
+    try:
+        with open("app/agent/config/orchestrator/system_prompt.yaml", 'r', encoding='utf-8') as f:
+            return yaml.safe_load(f)
+    except Exception as e:
+        print(f"Error loading orchestrator config: {e}")
+        return {}
+
+ORCHESTRATOR_CONFIG = get_orchestrator_config()
+ORCHESTRATOR_QUESTIONS = ORCHESTRATOR_CONFIG.get("questions", {})
+ORCHESTRATOR_INSTRUCTIONS = ORCHESTRATOR_CONFIG.get("instructions", "")
+
 ORCHESTRATOR_SYSTEM_PROMPT = f"""
-{load_file("app/agent/config/orchestrator/system_prompt.md")}
-
-{load_file("app/agent/config/orchestrator/skills.md")}
-
-{load_file("app/agent/config/orchestrator/guard_rails.md")}
+{ORCHESTRATOR_INSTRUCTIONS}
 
 SEMANTIC LAYER MODULES (METADATA ONLY):
 {build_orchestrator_context()}
-"""
+""".strip()
 
-FORMATTER_PROMPT = f"""
-{load_file("app/agent/config/formatter/system_prompt.md")}
+def get_formatter_prompt() -> str:
+    return load_file("app/agent/config/formatter/system_prompt.md").strip()
 
-{load_file("app/agent/config/formatter/skills.md")}
-
-{load_file("app/agent/config/formatter/guard_rails.md")}
-
-CRITICAL INSTRUCTION FOR MARKDOWN TABLES:
-When rendering Statuses, Severities, Ticket Types, Priorities, Queues, or Hierarchy Levels inside a Markdown table, you MUST use the following exact template format if the query results provide color and icon data:
-`{{{{Type::Name::Color::Icon}}}}`
-
-Types mapping:
-- Status: `{{{{Status::Name::Color::Icon}}}}` (e.g. `{{{{Status::In Progress::#3B82F6::loader}}}}`)
-- Severity/Priority: `{{{{Severity::Name::Color::Icon}}}}`
-- Type: `{{{{Type::Name::Color::Icon}}}}`
-- Hierarchy: `{{{{Hierarchy::Name::Color::Icon}}}}`
-- Queue: `{{{{Queue::Name::Color::Icon}}}}`
-
-If color or icon is missing, leave it blank (e.g. `{{{{Status::Completed::::}}}}`). Do not use this syntax outside of Markdown tables.
-"""
+FORMATTER_PROMPT = get_formatter_prompt()
 
 def get_worker_prompt(domain_name: str) -> str:
     domain_dir = f"app/agent/config/{domain_name}"
@@ -99,13 +91,8 @@ def get_worker_prompt(domain_name: str) -> str:
 
 {guard_rails}
 
-CRITICAL RULES FOR METADATA COLUMNS:
-When querying for status, severity, ticket type, or hierarchy levels, you MUST SELECT the associated `_name`, `_color`, and `_icon` columns (e.g. `status_name`, `status_color`) ONLY IF they explicitly exist in the schema for that specific table/view. Do not assume all entities have an `_icon` or `_color` column; check the schema first.
-NEVER return `_base` columns (like `status_base`) in the final output; ONLY use `_base` columns for WHERE clause filtering.
-When the user filters by an organization or brand like "Synlio", you MUST map this to the `company_name` column, NOT to `task_space_name` or `ticket_space_name`.
-
 SEMANTIC LAYER SCHEMA (ONLY FOR {domain_name.upper()}):
 {domain_schema_str}
 
 {system_prompt}
-"""
+""".strip()

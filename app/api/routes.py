@@ -14,7 +14,7 @@ async def chat(request: ChatRequest):
         
     async def event_stream():
         try:
-            async for chunk in insight_agent.astream_run(request.message):
+            async for chunk in insight_agent.astream_run(request.message, conversation_id=request.conversation_id):
                 yield chunk
         except Exception as e:
             print(f"--- INTERNAL SERVER ERROR ---")

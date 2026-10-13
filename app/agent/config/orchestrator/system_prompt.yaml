@@ -1,0 +1,19 @@
+# Jev / Decisions API Question Configurations
+questions:
+  domain:
+    type: "choice"
+    instructions: "Which specific domains are needed to handle the user's latest request, considering conversation context if it is a follow-up?"
+    criteria:
+      project_analytics: "Questions or follow-ups about projects, tasks, task statuses, schedule progress, delays, effort, and timelines"
+      ticket_analytics: "Questions or follow-ups about tickets, issues, bugs, queues, and ticket resolution"
+      resource_analytics: "Questions or follow-ups about team members, workload, allocation, utilization, or availability"
+      none: "Unrelated, greetings, general queries, or conversational chitchat that does not relate to previous data"
+
+  frustration_level:
+    type: "choice"
+    instructions: "What is the user's frustration level based on their tone?"
+    criteria:
+      high: "User is angry, very upset, or demanding immediate escalation"
+      medium: "User is annoyed, impatient, or complaining about delays"
+      low: "User is slightly frustrated or confused"
+      none: "User is calm, polite, or neutral"

@@ -11,9 +11,12 @@ def merge_dicts(a: Optional[dict], b: Optional[dict]) -> dict:
 
 class AgentState(TypedDict):
     messages: Annotated[Sequence[BaseMessage], add_messages]
-    extracted_values: Optional[dict]
-    execution_plan: Optional[list[str]]
-    current_step: Optional[int]
-    domain_results: Annotated[Optional[dict], merge_dicts]
+    active_workers: Optional[list[str]]
+    error_message: Optional[str]
+    current_round: Optional[int]
+    retry_feedback: Optional[str]
+    needs_retry: Optional[bool]
+
 import contextvars
 global_token_usage = contextvars.ContextVar("global_token_usage", default=[0])
+

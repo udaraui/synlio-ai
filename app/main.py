@@ -18,7 +18,7 @@ async def analyze_data(request: QueryRequest):
         raise HTTPException(status_code=500, detail="LLM API Key is not set or agent failed to initialize.")
         
     # Run the insight agent with the user's query
-    result = await insight_agent.arun(request.query)
+    result = await insight_agent.arun(request.query, conversation_id=request.conversation_id)
     return QueryResponse(response=result.data)
 
 @app.get("/health")

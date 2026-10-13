@@ -7,7 +7,13 @@ from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field
 
 from app.agent.state import AgentState, global_token_usage
-from app.agent.prompts import ORCHESTRATOR_SYSTEM_PROMPT, FORMATTER_PROMPT, get_worker_prompt
+from app.agent.prompts import (
+    ORCHESTRATOR_SYSTEM_PROMPT,
+    ORCHESTRATOR_QUESTIONS,
+    FORMATTER_PROMPT,
+    get_formatter_prompt,
+    get_worker_prompt,
+)
 
 def print_usage(node_name: str, response, elapsed: float = 0.0):
     total = 0
@@ -61,13 +67,20 @@ def print_usage(node_name: str, response, elapsed: float = 0.0):
 def make_orchestrator_node(llm: ChatOpenAI):
     async def orchestrator_node(state: AgentState, config: RunnableConfig):
         messages = state.get("messages", [])
+        is_retry = bool(state.get("needs_retry"))
+        current_round = state.get("current_round", 1) if is_retry else 1
+        retry_feedback = state.get("retry_feedback") if is_retry else None
+
         try:
             import time
             import os
             import httpx
             
-            print("[ORCHESTRATOR]=======================================================")
-            print("Analyzing prompt and extracting semantic context with Jeff (via OpenRouter Decisions API)...")
+            if is_retry:
+                print(f"[ORCHESTRATOR] Re-orchestrating from the top (Round {current_round})...")
+            else:
+                print("[ORCHESTRATOR]=======================================================")
+                print("Analyzing prompt and extracting semantic context with Jeff (via OpenRouter Decisions API)...")
             start_time = time.time()
             
             # Reconstruct the conversation history
@@ -85,7 +98,7 @@ def make_orchestrator_node(llm: ChatOpenAI):
             payload = {
                 "model": "typesafe/jev-1.13",
                 "state": chat_history,
-                "questions": {
+                "questions": ORCHESTRATOR_QUESTIONS or {
                     "domain": {
                         "type": "choice",
                         "instructions": "Which specific domains are needed to handle the user's latest request?",
@@ -148,15 +161,16 @@ def make_orchestrator_node(llm: ChatOpenAI):
             print(f"Frustration Probabilities: {frust_answer.get('probabilities', {})}")
             print(f"User Frustration Level: {frustration.upper()}")
             
-            print(f"Execution Plan (TypeSafe Choice): {domains}")
+            print(f"Active Workers: {domains}")
             elapsed = time.time() - start_time
             print(f"Time: {elapsed:.2f}s")
             print()
             
             return {
-                "execution_plan": domains,
-                "current_step": 0,
-                "domain_results": {}
+                "active_workers": domains,
+                "current_round": current_round,
+                "retry_feedback": retry_feedback,
+                "needs_retry": False
             }
         except Exception as e:
             error_str = str(e)
@@ -164,35 +178,52 @@ def make_orchestrator_node(llm: ChatOpenAI):
             
             if "401" in error_str or "expired" in error_str.lower() or "unauthorized" in error_str.lower():
                 return {
-                    "execution_plan": [],
-                    "current_step": 0,
-                    "domain_results": {},
+                    "active_workers": [],
+                    "current_round": current_round,
+                    "retry_feedback": retry_feedback,
+                    "needs_retry": False,
                     "error_message": "The AI service is currently unavailable due to an API key or authentication error. Please check the backend console for details."
                 }
             
             return {
-                "execution_plan": [],
-                "current_step": 0,
-                "domain_results": {}
+                "active_workers": [],
+                "current_round": current_round,
+                "retry_feedback": retry_feedback,
+                "needs_retry": False
             }
     return orchestrator_node
 
 def make_worker_node(llm: ChatOpenAI, domain: str, tool_func):
     async def worker_node(state: AgentState, config: RunnableConfig):
-        domain_results = state.get("domain_results", {})
-        
         system_content = get_worker_prompt(domain)
-        if domain_results:
-            system_content += f"\n\nPREVIOUS DOMAIN RESULTS: {json.dumps(domain_results)}"
         
         # Bind the specialized tool and force it to be called
         llm_with_tools = llm.bind_tools([tool_func], tool_choice="any")
         
-        # Extract only the last user query to save tokens
+        # Extract conversation messages for context in follow-up queries (up to last 6 messages)
+        recent_msgs = state.get("messages", [])[-6:]
+        conversation_context = ""
+        for m in recent_msgs[:-1]:
+            role = "User" if isinstance(m, HumanMessage) else "Assistant"
+            conversation_context += f"{role}: {m.content}\n"
+
         human_msgs = [m for m in state.get("messages", []) if isinstance(m, HumanMessage)]
         user_query = human_msgs[-1].content if human_msgs else ""
         
-        messages = [SystemMessage(content=system_content), HumanMessage(content=str(user_query))]
+        prompt_query = user_query
+        if conversation_context.strip():
+            prompt_query = f"CONVERSATION HISTORY:\n{conversation_context.strip()}\n\nCURRENT USER REQUEST:\n{user_query}"
+
+        retry_feedback = state.get("retry_feedback")
+        if retry_feedback:
+            prompt_query += (
+                f"\n\n[RETRY NOTICE: Previous query execution returned no results or failed: {retry_feedback}. "
+                f"Please review the Semantic Layer Schema carefully and adjust your query: "
+                f"use wildcards (e.g. '%value%' with ILIKE), verify table and column names in the schema, "
+                f"or relax filter constraints to find matching data.]"
+            )
+
+        messages = [SystemMessage(content=system_content), HumanMessage(content=str(prompt_query))]
         
         print(f"[{domain.upper()}]==================================================")
         print("Generating query...")
@@ -204,9 +235,9 @@ def make_worker_node(llm: ChatOpenAI, domain: str, tool_func):
             
             # Log the output tool calls or response
             if getattr(response, "tool_calls", None):
-                print(f"Tool Called: {response.tool_calls[0]['name']}")
-                import json
-                print(f"Arguments: {json.dumps(response.tool_calls[0]['args'], indent=2)}")
+                for tc in response.tool_calls:
+                    print(f"Tool Called: {tc['name']}")
+                    print(f"Arguments: {json.dumps(tc['args'], indent=2)}")
             else:
                 print(f"Output: {response.content}")
                 
@@ -226,10 +257,10 @@ def make_worker_node(llm: ChatOpenAI, domain: str, tool_func):
 
 def make_formatter_node(llm: ChatOpenAI):
     async def formatter_node(state: AgentState, config: RunnableConfig):
-        human_msgs = [m for m in state.get("messages", []) if isinstance(m, HumanMessage)]
+        messages = state.get("messages", [])
+        human_msgs = [m for m in messages if isinstance(m, HumanMessage)]
         user_query = human_msgs[-1].content if human_msgs else ""
-        domain_results = state.get("domain_results", {})
-        execution_plan = state.get("execution_plan", [])
+        active_workers = state.get("active_workers", [])
         
         print("[FORMATTER]==========================================")
         print("Formatting final response...")
@@ -241,15 +272,58 @@ def make_formatter_node(llm: ChatOpenAI):
             print()
             return {"messages": [response]}
         
-        if not execution_plan and not domain_results:
+        # Inlined Extraction: extract tool outputs directly from recent ToolMessages
+        tool_map = {
+            "query_project_data": "project_analytics",
+            "query_ticket_data": "ticket_analytics",
+            "query_resource_data": "resource_analytics"
+        }
+        
+        domain_results = {}
+        # Find index of last human message to only extract tool messages from the current turn
+        last_human_idx = 0
+        for i, m in enumerate(messages):
+            if isinstance(m, HumanMessage):
+                last_human_idx = i
+                
+        turn_messages = messages[last_human_idx:]
+        for msg in turn_messages:
+            if getattr(msg, "type", "") == "tool" and msg.name in tool_map:
+                domain = tool_map[msg.name]
+                text = (msg.content or "").strip()
+                if (
+                    text
+                    and "query returned zero rows" not in text.lower()
+                    and "[0]: []" not in text
+                    and "error" not in text.lower()
+                    and "issue while trying" not in text.lower()
+                ):
+                    if domain not in domain_results:
+                        domain_results[domain] = text
+                    else:
+                        domain_results[domain] += "\n\n" + text
+        
+        if not active_workers and not domain_results:
             response_text = "I'm sorry, I couldn't understand your request or map it to a specific analytics domain. Could you please rephrase?"
             response = AIMessage(content=response_text)
-            print("Completed! (Fallback Error)")
+            print("Completed! (Fallback / No Domain)")
             print()
             return {"messages": [response]}
         
-        # print(f"DEBUG - Domain Results going to Formatter: {json.dumps(domain_results)[:500]}")
-        content = FORMATTER_PROMPT + f"\n\nUSER QUERY: {user_query}\n\nDOMAIN RESULTS: {json.dumps(domain_results)}"
+        recent_msgs = messages[-6:]
+        conv_history = ""
+        for m in recent_msgs[:-1]:
+            role = "User" if isinstance(m, HumanMessage) else "Assistant"
+            conv_history += f"{role}: {m.content}\n"
+
+        domain_results_text = ""
+        for dom, toon_data in domain_results.items():
+            domain_results_text += f"\n--- {dom.upper()} ---\n{toon_data}\n"
+
+        content = get_formatter_prompt()
+        if conv_history.strip():
+            content += f"\n\nRECENT CONVERSATION:\n{conv_history.strip()}"
+        content += f"\n\nUSER QUERY: {user_query}\n\nDOMAIN RESULTS (TOON Format):\n{domain_results_text.strip() if domain_results_text.strip() else 'No records found.'}"
         
         try:
             response = await llm.ainvoke([
