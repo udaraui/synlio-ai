@@ -16,3 +16,7 @@ venv.bak/
 .idea/
 .vscode/
 
+# Logs & Data
+logs/
+*.csv
+

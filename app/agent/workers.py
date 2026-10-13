@@ -43,7 +43,8 @@ def print_usage(node_name: str, response, elapsed: float = 0.0):
             import csv
             from datetime import datetime
             
-            csv_file = "llm_benchmark_logs.csv"
+            os.makedirs("logs", exist_ok=True)
+            csv_file = os.path.join("logs", "llm_benchmark_logs.csv")
             file_exists = os.path.isfile(csv_file)
             
             with open(csv_file, mode='a', newline='', encoding='utf-8') as f:

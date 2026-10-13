@@ -11,7 +11,10 @@ def load_file(path: str) -> str:
 
 def get_parsed_semantic_layer():
     try:
-        with open("app/semantic_layer.yml", 'r', encoding='utf-8') as f:
+        schema_path = os.path.join(os.path.dirname(__file__), "schema", "semantic_layer.yml")
+        if not os.path.exists(schema_path):
+            schema_path = "app/agent/schema/semantic_layer.yml"
+        with open(schema_path, 'r', encoding='utf-8') as f:
             return yaml.safe_load(f)
     except Exception as e:
         print(f"Error parsing yaml: {e}")
@@ -21,7 +24,7 @@ SEMANTIC_LAYER_DATA = get_parsed_semantic_layer()
 
 # Build the lightweight Orchestrator Context (No tables or KPIs)
 def build_orchestrator_context() -> str:
-    modules = SEMANTIC_LAYER_DATA.get("modules", {})
+    modules = get_parsed_semantic_layer().get("modules", {})
     context = []
     for module_name, details in modules.items():
         context.append(f"Module: {module_name}")
@@ -61,7 +64,7 @@ def get_worker_prompt(domain_name: str) -> str:
     guard_rails = load_file(f"{domain_dir}/guard_rails.md")
     
     # Extract ONLY the schema (tables and kpis) for this specific domain to save tokens
-    modules = SEMANTIC_LAYER_DATA.get("modules", {})
+    modules = get_parsed_semantic_layer().get("modules", {})
     domain_data = modules.get(domain_name, {})
     
     # Strip out verbose metadata to save IN tokens. Only pass table names, column names, and KPI names.

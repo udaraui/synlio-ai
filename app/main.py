@@ -1,25 +1,15 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.responses import PlainTextResponse
-from app.api.routes import router as chat_router
-from app.agent.agent import insight_agent
-from app.api.models import QueryRequest, QueryResponse
+from app.api.chat import router as chat_router
+from app.agent.service import insight_agent
 
-app = FastAPI(title="Cubix Analytics API")
+app = FastAPI(title="Synlio AI API")
 
 app.include_router(chat_router)
 
 @app.get("/", response_class=PlainTextResponse)
 def read_root():
-    return "hello synlio AI!"
-
-@app.post("/analyze", response_model=QueryResponse)
-async def analyze_data(request: QueryRequest):
-    if not insight_agent:
-        raise HTTPException(status_code=500, detail="LLM API Key is not set or agent failed to initialize.")
-        
-    # Run the insight agent with the user's query
-    result = await insight_agent.arun(request.query, conversation_id=request.conversation_id)
-    return QueryResponse(response=result.data)
+    return "Synlio AI service is running."
 
 @app.get("/health")
 def health_check():

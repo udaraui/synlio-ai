@@ -250,13 +250,15 @@ modules:
           Aggregated ticketing data tracking volumes, SLAs, and resolution metrics.
         columns:
           # ── Dimensions ──
+          - name: company_name
+            type: VARCHAR
+            filterable: true
+            filter_code: company_name
           - name: ticket_space_name
             type: VARCHAR
             filterable: true
             filter_code: ticket_space_name
           - name: ticket_type_name
-            type: VARCHAR
-          - name: ticket_type_icon
             type: VARCHAR
           - name: ticket_type_color
             type: VARCHAR
@@ -264,18 +266,14 @@ modules:
             type: VARCHAR
             filterable: true
             filter_code: priority_name
-          - name: priority_icon
-            type: VARCHAR
           - name: priority_color
+            type: VARCHAR
+          - name: status_name
             type: VARCHAR
           - name: status_base
             type: VARCHAR
             filterable: true
             filter_code: status_base
-          - name: status_icon
-            type: VARCHAR
-          - name: status_color
-            type: VARCHAR
           - name: queue_name
             type: VARCHAR
             filterable: true
@@ -301,6 +299,7 @@ modules:
             type: NUMBER
 
         filter_columns:
+          company_name: company_name
           ticket_space_name: ticket_space_name
           priority_name: priority_name
           status_base: status_base

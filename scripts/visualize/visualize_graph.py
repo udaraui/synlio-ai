@@ -10,7 +10,7 @@ from pathlib import Path
 
 # Add project root to sys.path so 'app' package can be imported regardless of working directory
 SCRIPT_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = SCRIPT_DIR.parent
+PROJECT_ROOT = SCRIPT_DIR.parent.parent if SCRIPT_DIR.parent.name == "scripts" else SCRIPT_DIR.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -34,7 +34,7 @@ def main():
             f.write(png_bytes)
         print(f" Successfully exported graph diagram to '{png_path.name}' in {SCRIPT_DIR.name}/!")
     except Exception as e:
-        print(f"⚠️ Could not generate PNG (network/service error): {e}")
+        print(f" Could not generate PNG (network/service error): {e}")
 
     # 2. Save Mermaid markdown file
     try:
@@ -43,7 +43,7 @@ def main():
             f.write("```mermaid\n" + mermaid_code + "\n```\n")
         print(f" Successfully exported Mermaid syntax to '{md_path.name}' in {SCRIPT_DIR.name}/!")
     except Exception as e:
-        print(f"⚠️ Could not generate Mermaid syntax: {e}")
+        print(f" Could not generate Mermaid syntax: {e}")
 
     print("\nMermaid Definition:")
     print("--------------------------------------------------")
