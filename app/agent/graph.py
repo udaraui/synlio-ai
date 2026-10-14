@@ -36,7 +36,9 @@ def create_graph(llm: ChatOpenAI, orchestrator_llm: ChatOpenAI = None):
         
         all_messages = []
         for res in results:
-            if isinstance(res, dict) and "messages" in res:
+            if isinstance(res, Exception):
+                print(f"[WORKER CRASH] Exception in worker: {res}")
+            elif isinstance(res, dict) and "messages" in res:
                 all_messages.extend(res["messages"])
         return {"messages": all_messages}
         
@@ -74,6 +76,12 @@ def create_graph(llm: ChatOpenAI, orchestrator_llm: ChatOpenAI = None):
             # If user explicitly specified force in their prompt, ensure force=True is passed
             if user_wants_force:
                 args["force"] = True
+
+            # Inject authenticated security context into tool execution
+            if state.get("company_id") is not None:
+                args["company_id"] = state.get("company_id")
+            if state.get("scope") is not None:
+                args["scope"] = state.get("scope")
             
             if tool_func:
                 try:

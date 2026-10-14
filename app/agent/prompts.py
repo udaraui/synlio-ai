@@ -6,6 +6,11 @@ def load_file(path: str) -> str:
     if os.path.exists(path):
         with open(path, 'r', encoding='utf-8') as f:
             return f.read()
+    # Also attempt relative to app/agent directory
+    rel_path = os.path.join(os.path.dirname(__file__), path.replace("app/agent/", ""))
+    if os.path.exists(rel_path):
+        with open(rel_path, 'r', encoding='utf-8') as f:
+            return f.read()
     print(f"Warning: Prompt file {path} not found.")
     return ""
 
@@ -34,8 +39,11 @@ def build_orchestrator_context() -> str:
 
 def get_orchestrator_config():
     try:
-        with open("app/agent/config/orchestrator/system_prompt.yaml", 'r', encoding='utf-8') as f:
-            return yaml.safe_load(f)
+        config_path = os.path.join(os.path.dirname(__file__), "config", "orchestrator", "system_prompt.yaml")
+        if not os.path.exists(config_path):
+            config_path = "app/agent/config/orchestrator/system_prompt.yaml"
+        with open(config_path, 'r', encoding='utf-8') as f:
+            return yaml.safe_load(f) or {}
     except Exception as e:
         print(f"Error loading orchestrator config: {e}")
         return {}
@@ -99,3 +107,24 @@ SEMANTIC LAYER SCHEMA (ONLY FOR {domain_name.upper()}):
 
 {system_prompt}
 """.strip()
+
+def get_worker_user_context(
+    user_email: str = None,
+    user_id: str = None,
+    company_id: int = None,
+    user_name: str = None,
+    user_manager: str = None,
+    user_pool: str = None,
+) -> str:
+    template = load_file("app/agent/config/worker/system_prompt.md")
+    if not template:
+        return ""
+    
+    return template.format(
+        user_email=user_email or "N/A",
+        user_id=user_id or "N/A",
+        company_id=company_id if company_id is not None else "N/A",
+        user_name=user_name or "N/A",
+        user_manager=user_manager or "N/A",
+        user_pool=user_pool or "N/A",
+    ).strip()

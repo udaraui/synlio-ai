@@ -1,6 +1,8 @@
+import os
 import json
 import time
 from typing import Literal
+from sqlalchemy import create_engine, text
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_core.runnables import RunnableConfig
@@ -13,6 +15,7 @@ from app.agent.prompts import (
     FORMATTER_PROMPT,
     get_formatter_prompt,
     get_worker_prompt,
+    get_worker_user_context,
 )
 
 def print_usage(node_name: str, response, elapsed: float = 0.0):
@@ -90,37 +93,25 @@ def make_orchestrator_node(llm: ChatOpenAI):
                 role = "User" if m.type == "human" else "Assistant"
                 chat_history += f"{role}: {m.content}\n"
                 
-            # Both keys are the same, just use the main LLM API key
-            api_key = os.getenv("LLM_API_KEY")
+            # Use the orchestrator LLM model and API key
+            model_name = getattr(llm, "model_name", "typesafe/jev-1.13") if llm else "typesafe/jev-1.13"
+            raw_key = getattr(llm, "openai_api_key", None)
+            if hasattr(raw_key, "get_secret_value"):
+                api_key = raw_key.get_secret_value()
+            else:
+                api_key = str(raw_key) if raw_key else None
+
+            if not api_key or api_key.startswith("***"):
+                api_key = os.getenv("LLM_API_KEY")
+
             if not api_key:
                 print("WARNING: LLM_API_KEY is not set.")
             
             # OpenRouter requires hitting /api/alpha/decisions for jev-1.13
             payload = {
-                "model": "typesafe/jev-1.13",
+                "model": model_name,
                 "state": chat_history,
-                "questions": ORCHESTRATOR_QUESTIONS or {
-                    "domain": {
-                        "type": "choice",
-                        "instructions": "Which specific domains are needed to handle the user's latest request?",
-                        "criteria": {
-                            "project_analytics": "Questions about projects, tasks and timelines",
-                            "ticket_analytics": "Questions about tickets, issues, and bugs",
-                            "resource_analytics": "Questions about people, allocation, or availability",
-                            "none": "Unrelated or general queries"
-                        }
-                    },
-                    "frustration_level": {
-                        "type": "choice",
-                        "instructions": "What is the user's frustration level based on their tone?",
-                        "criteria": {
-                            "high": "User is angry, very upset, or demanding",
-                            "medium": "User is annoyed or impatient",
-                            "low": "User is slightly frustrated or confused",
-                            "none": "User is calm, polite, or neutral"
-                        }
-                    }
-                }
+                "questions": ORCHESTRATOR_QUESTIONS
             }
             
             async with httpx.AsyncClient() as client:
@@ -162,6 +153,24 @@ def make_orchestrator_node(llm: ChatOpenAI):
             print(f"Frustration Probabilities: {frust_answer.get('probabilities', {})}")
             print(f"User Frustration Level: {frustration.upper()}")
             
+            UNAVAILABLE_DOMAINS = {"project_analytics", "ticket_analytics"}
+            requested_unavailable = [d for d in domains if d in UNAVAILABLE_DOMAINS]
+            valid_active_workers = [d for d in domains if d not in UNAVAILABLE_DOMAINS]
+
+            if requested_unavailable and not valid_active_workers:
+                unavailable_msg = "Project Analytics and Ticket Analytics are temporarily unavailable while system updates are underway. Only Resource Analytics is currently available."
+                print(f"[ORCHESTRATOR] Intercepted unavailable domain request: {requested_unavailable}. Returning notice.")
+                return {
+                    "active_workers": [],
+                    "current_round": current_round,
+                    "retry_feedback": retry_feedback,
+                    "needs_retry": False,
+                    "error_message": unavailable_msg
+                }
+            elif requested_unavailable and valid_active_workers:
+                print(f"[ORCHESTRATOR] Mixed request detected. Keeping available domains: {valid_active_workers} (filtering out {requested_unavailable})")
+                domains = valid_active_workers
+
             print(f"Active Workers: {domains}")
             elapsed = time.time() - start_time
             print(f"Time: {elapsed:.2f}s")
@@ -183,7 +192,7 @@ def make_orchestrator_node(llm: ChatOpenAI):
                     "current_round": current_round,
                     "retry_feedback": retry_feedback,
                     "needs_retry": False,
-                    "error_message": "The AI service is currently unavailable due to an API key or authentication error. Please check the backend console for details."
+                    "error_message": "The AI service is currently unavailable. Please check the backend console for details."
                 }
             
             return {
@@ -196,7 +205,46 @@ def make_orchestrator_node(llm: ChatOpenAI):
 
 def make_worker_node(llm: ChatOpenAI, domain: str, tool_func):
     async def worker_node(state: AgentState, config: RunnableConfig):
-        system_content = get_worker_prompt(domain)
+        from datetime import datetime
+        current_date_str = datetime.now().strftime("%Y-%m-%d")
+        system_content = f"CURRENT SYSTEM DATE: {current_date_str} (Today's date)\n\n" + get_worker_prompt(domain)
+        
+        user_email = state.get("user_email")
+        user_id = state.get("user_id")
+        company_id = state.get("company_id")
+
+        if user_email:
+            user_name = None
+            user_manager = None
+            user_pool = None
+            try:
+                pg_db_url = os.getenv("PG_DB_URL")
+                if pg_db_url:
+                    engine = create_engine(pg_db_url)
+                    with engine.connect() as conn:
+                        if company_id is not None:
+                            q = text("SELECT full_name, reporting_resource_name, pool_list FROM gold.dim_resource WHERE email = :e AND company_id = :c LIMIT 1")
+                            row = conn.execute(q, {"e": user_email, "c": company_id}).fetchone()
+                        else:
+                            q = text("SELECT full_name, reporting_resource_name, pool_list FROM gold.dim_resource WHERE email = :e LIMIT 1")
+                            row = conn.execute(q, {"e": user_email}).fetchone()
+                        if row:
+                            user_name = row[0]
+                            user_manager = row[1]
+                            user_pool = row[2]
+            except Exception as e:
+                print(f"[WORKER USER LOOKUP] Warning: Could not look up user profile: {e}")
+
+            worker_user_context = get_worker_user_context(
+                user_email=user_email,
+                user_id=user_id,
+                company_id=company_id,
+                user_name=user_name,
+                user_manager=user_manager,
+                user_pool=user_pool,
+            )
+            if worker_user_context:
+                system_content += f"\n\n{worker_user_context}"
         
         # Bind the specialized tool and force it to be called
         llm_with_tools = llm.bind_tools([tool_func], tool_choice="any")
@@ -250,7 +298,7 @@ def make_worker_node(llm: ChatOpenAI, domain: str, tool_func):
             error_str = str(e)
             print(f"Error in {domain} worker: {error_str}")
             if "401" in error_str or "expired" in error_str.lower() or "unauthorized" in error_str.lower():
-                msg = AIMessage(content="The AI service is currently unavailable due to an API key or authentication error. Please check the backend console for details.")
+                msg = AIMessage(content="The AI service is currently unavailable. Please check the backend console for details.")
                 return {"messages": [msg], "error_message": msg.content}
             msg = AIMessage(content=f"An error occurred in the {domain} worker. Please try again.")
             return {"messages": [msg]}

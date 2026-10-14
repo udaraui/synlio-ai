@@ -9,13 +9,23 @@ def merge_dicts(a: Optional[dict], b: Optional[dict]) -> dict:
     res.update(b or {})
     return res
 
-class AgentState(TypedDict):
+class UserScope(TypedDict, total=False):
+    allowed_ticket_space_ids: Optional[list[int]]
+    allowed_task_space_ids: Optional[list[int]]
+    root_task_restrictions: Optional[dict[str, list[int]]]
+
+class AgentState(TypedDict, total=False):
     messages: Annotated[Sequence[BaseMessage], add_messages]
     active_workers: Optional[list[str]]
     error_message: Optional[str]
     current_round: Optional[int]
     retry_feedback: Optional[str]
     needs_retry: Optional[bool]
+    # Context & Access Scope
+    user_id: Optional[int]
+    user_email: Optional[str]
+    company_id: Optional[int]
+    scope: Optional[UserScope]
 
 import contextvars
 global_token_usage = contextvars.ContextVar("global_token_usage", default=[0])

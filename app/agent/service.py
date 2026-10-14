@@ -19,7 +19,6 @@ class InsightAgent:
         self.llm = ChatOpenAI(
             model="openai/gpt-4o-mini",
             # model="nvidia/nemotron-3-nano-30b-a3b",
-            # model="typesafe/jev-1.13",
             api_key=key,
             temperature=0,
             base_url="https://openrouter.ai/api/v1",
@@ -28,7 +27,7 @@ class InsightAgent:
         
         self.orchestrator_llm = ChatOpenAI(
             model="typesafe/jev-1.13",
-            api_key=os.getenv("JEFF_API_KEY", key),
+            api_key=key,
             temperature=0,
             base_url="https://openrouter.ai/api/v1",
             streaming=True
@@ -37,16 +36,39 @@ class InsightAgent:
         # Build and compile the graph
         self.agent_executor = create_graph(self.llm, self.orchestrator_llm)
 
-    async def arun(self, query: str, conversation_id: Optional[str] = None) -> AgentResult:
+    async def arun(
+        self,
+        query: str,
+        conversation_id: Optional[str] = None,
+        user_id: Optional[int] = None,
+        user_email: Optional[str] = None,
+        company_id: Optional[int] = None,
+        scope: Optional[dict] = None,
+    ) -> AgentResult:
         config = {"configurable": {"thread_id": conversation_id or "default"}}
-        response = await self.agent_executor.ainvoke({"messages": [("user", query)]}, config=config)
+        input_state = {
+            "messages": [("user", query)],
+            "user_id": user_id,
+            "user_email": user_email,
+            "company_id": company_id,
+            "scope": scope,
+        }
+        response = await self.agent_executor.ainvoke(input_state, config=config)
         output = response["messages"][-1].content
         if isinstance(output, list):
             text_parts = [block.get("text", "") for block in output if block.get("type") == "text"]
             output = "".join(text_parts)
         return AgentResult(data=str(output))
 
-    async def astream_run(self, query: str, conversation_id: Optional[str] = None):
+    async def astream_run(
+        self,
+        query: str,
+        conversation_id: Optional[str] = None,
+        user_id: Optional[int] = None,
+        user_email: Optional[str] = None,
+        company_id: Optional[int] = None,
+        scope: Optional[dict] = None,
+    ):
         from app.agent.state import global_token_usage
         import time
         global_token_usage.set([0])
@@ -58,8 +80,16 @@ class InsightAgent:
         formatter_started = False
         config = {"configurable": {"thread_id": conversation_id or "default"}}
         
+        input_state = {
+            "messages": [("user", query)],
+            "user_id": user_id,
+            "user_email": user_email,
+            "company_id": company_id,
+            "scope": scope,
+        }
+        
         # stream_mode multiple yields (stream_mode, data) in newer langgraph
-        async for item in self.agent_executor.astream({"messages": [("user", query)]}, config=config, stream_mode=["messages"]):
+        async for item in self.agent_executor.astream(input_state, config=config, stream_mode=["messages"]):
             if isinstance(item, tuple) and len(item) == 2:
                 mode, payload = item
                 if mode == "messages":

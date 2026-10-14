@@ -1,5 +1,5 @@
 version: "1.0.0"
-description: "Centralized semantic layer for Synlio AI — single source of truth for all Synalytics modules."
+description: "Centralized semantic layer for Synlio AI — single source of truth for Pure Resource Analytics."
 
 # ═══════════════════════════════════════════════════════════════════════
 # MODULES
@@ -7,163 +7,38 @@ description: "Centralized semantic layer for Synlio AI — single source of trut
 modules:
 
   # ─────────────────────────────────────────────────────────────────────
-  # PROJECT ANALYTICS
-  # ─────────────────────────────────────────────────────────────────────
-  project_analytics:
-    display_name: "Project Analytics"
-    description: >-
-      Project performance data including task completions, effort variance, schedule delays,
-      and overall health scores across companies, divisions, and task spaces.
-    domain_focus: >-
-      Project tracking, task completion rates, effort estimation vs actuals,
-      schedule adherence, and hierarchy progress.
-
-    tables:
-      - name: marts.vw_project_dashboard
-        description: >-
-          Aggregated project and task dashboard data. Represents project health, effort,
-          and schedule progress across hierarchies.
-        columns:
-          # ── Dimensions ──
-          - name: company_name
-            type: VARCHAR
-            filterable: true
-            filter_code: company_name
-          - name: division_name
-            type: VARCHAR
-            filterable: true
-            filter_code: division_name
-          - name: task_space_name
-            type: VARCHAR
-            filterable: true
-            filter_code: task_space_name
-          - name: hierarchy_level_configured_name
-            type: VARCHAR
-          
-          # ── Time Dimensions ──
-          - name: earliest_start_date
-            type: DATE
-            time_dimension: true
-          - name: latest_planned_end
-            type: DATE
-            time_dimension: true
-          - name: latest_actual_end
-            type: DATE
-            time_dimension: true
-          
-          # ── Measures ──
-          - name: total_items
-            type: NUMBER
-          - name: completed_items
-            type: NUMBER
-          - name: overdue_items
-            type: NUMBER
-          - name: effort_variance_hrs
-            type: NUMBER
-          - name: schedule_delay_days
-            type: NUMBER
-          - name: avg_health_score
-            type: NUMBER
-
-        filter_columns:
-          company_name: company_name
-          division_name: division_name
-          task_space_name: task_space_name
-
-      - name: marts.vw_project_task_detail
-        description: >-
-          Detailed view of individual project tasks, providing granular data on statuses,
-          assignees, effort hours, scheduling, and hierarchy placement.
-        columns:
-          - name: task_code
-            type: VARCHAR
-          - name: task_name
-            type: VARCHAR
-          - name: company_name
-            type: VARCHAR
-            filterable: true
-            filter_code: company_name
-          - name: task_space_name
-            type: VARCHAR
-            filterable: true
-            filter_code: task_space_name
-          - name: status_base
-            type: VARCHAR
-            filterable: true
-            filter_code: status_base
-          - name: status_name
-            type: VARCHAR
-          - name: status_color
-            type: VARCHAR
-          - name: severity_name
-            type: VARCHAR
-          - name: severity_color
-            type: VARCHAR
-          - name: hierarchy_level_name
-            type: VARCHAR
-          - name: hierarchy_level_color
-            type: VARCHAR
-          - name: hierarchy_level_icon
-            type: VARCHAR
-          - name: assignee_full_name
-            type: VARCHAR
-            filterable: true
-            filter_code: assignee_full_name
-          - name: assignee_profile_pic
-            type: VARCHAR
-          - name: planned_start_date
-            type: DATE
-            time_dimension: true
-          - name: planned_due_date
-            type: DATE
-            time_dimension: true
-          - name: estimate_effort_hrs
-            type: NUMBER
-          - name: actual_effort_hrs
-            type: NUMBER
-          - name: is_overdue
-            type: INTEGER
-          - name: task_health_score
-            type: NUMBER
-        filter_columns:
-          company_name: company_name
-          task_space_name: task_space_name
-          status_base: status_base
-          assignee_full_name: assignee_full_name
-
-    kpis:
-      completion_rate:
-        description: "Percentage of items completed"
-        formula: "SUM(completed_items) / NULLIF(SUM(total_items), 0) * 100"
-        depends_on: ["completed_items", "total_items"]
-        tags: ["Progress", "Projects"]
-      avg_schedule_delay:
-        description: "Average schedule delay in days"
-        formula: "AVG(schedule_delay_days)"
-        depends_on: ["schedule_delay_days"]
-        tags: ["Schedule", "Projects"]
-
-  # ─────────────────────────────────────────────────────────────────────
   # RESOURCE ANALYTICS
   # ─────────────────────────────────────────────────────────────────────
   resource_analytics:
     display_name: "Resource Analytics"
     description: >-
-      Resource utilization, capacity, costs, and workload distributions across divisions.
+      Resource workload, capacity, utilization, team availability, reporting hierarchy,
+      skills, pools, and cross-company allocations.
     domain_focus: >-
-      Resource capacity planning, utilization tracking, skill gaps, and cost analysis.
+      Resource capacity planning, utilization tracking, team workload status,
+      skills expertise, pool memberships, and management reporting hierarchy.
 
     tables:
-      - name: marts.vw_resource_dashboard
+      # ── Primary Workload Mart (Current Active Week) ──
+      - name: gold.mart_resource_workload_current
         description: >-
-          Aggregated resource metrics including active task counts, utilization percentages,
-          and cost analysis.
+          Main resource workload mart representing current capacity, planned and logged hours,
+          utilization percentages, free hours, workload status, and cross-company workload per resource.
+          IMPORTANT: This table is ALREADY pre-filtered to the CURRENT ACTIVE WEEK (the week
+          containing today). Do NOT add filters for week_start_date or week_end_date when
+          the user asks for 'this week' or 'current workload'.
         columns:
-          # ── Dimensions ──
-          - name: full_name
+          # ── Identifiers & Tenant ──
+          - name: resource_id
+            type: INTEGER
+          - name: person_id
             type: VARCHAR
             filterable: true
-            filter_code: full_name
+            filter_code: person_id
+          - name: company_id
+            type: INTEGER
+            filterable: true
+            filter_code: company_id
           - name: company_name
             type: VARCHAR
             filterable: true
@@ -172,176 +47,386 @@ modules:
             type: VARCHAR
             filterable: true
             filter_code: division_name
+          - name: full_name
+            type: VARCHAR
+            description: "Resource's human full name. ALWAYS display full_name instead of raw IDs."
+            filterable: true
+            filter_code: full_name
+
+          # ── Time Dimensions ──
+          - name: week_start_date
+            type: DATE
+            time_dimension: true
+          - name: week_end_date
+            type: DATE
+            time_dimension: true
+          - name: week_label
+            type: VARCHAR
+            filterable: true
+            filter_code: week_label
+          - name: as_of_date
+            type: DATE
+            time_dimension: true
+
+          # ── Capacity & Hours Measures ──
+          - name: capacity_hrs
+            type: NUMBER
+          - name: planned_hrs
+            type: NUMBER
+          - name: overdue_hrs
+            type: NUMBER
+          - name: undated_hrs
+            type: NUMBER
+          - name: logged_hrs
+            type: NUMBER
+          - name: free_hrs
+            type: NUMBER
+          - name: planned_utilization_pct
+            type: NUMBER
+          - name: logged_utilization_pct
+            type: NUMBER
           - name: workload_status
             type: VARCHAR
+            description: "Workload status enum: 'Available' (0 planned hours/free capacity), 'Overloaded' (planned exceeds capacity), 'Optimal' (balanced), or 'No Capacity' (0 capacity)."
             filterable: true
             filter_code: workload_status
 
-          # ── Measures ──
-          - name: utilization_pct
-            type: NUMBER
-          - name: monthly_cost
-            type: NUMBER
-          - name: active_task_count
-            type: NUMBER
+          # ── Task Counts ──
+          - name: open_task_count
+            type: INTEGER
           - name: overdue_task_count
+            type: INTEGER
+          - name: undated_task_count
+            type: INTEGER
+          - name: due_next_7_days_task_count
+            type: INTEGER
+          - name: co_assigned_task_count
+            type: INTEGER
+
+          # ── Ticket Counts ──
+          - name: open_ticket_count
+            type: INTEGER
+          - name: participating_ticket_count
+            type: INTEGER
+
+          # ── Cross-Company / Multi-Tenant Metrics ──
+          - name: other_company_count
+            type: INTEGER
+          - name: other_company_open_task_count
+            type: INTEGER
+          - name: other_company_planned_hrs
+            type: NUMBER
+          - name: other_company_logged_hrs
+            type: NUMBER
+          - name: other_company_allocation
+            type: VARCHAR
+          - name: other_company_open_ticket_count
+            type: INTEGER
+          - name: total_planned_hrs
+            type: NUMBER
+          - name: total_planned_utilization_pct
             type: NUMBER
 
         filter_columns:
+          company_id: company_id
           company_name: company_name
           division_name: division_name
           full_name: full_name
           workload_status: workload_status
+          week_label: week_label
+          person_id: person_id
 
-      - name: marts.vw_resource_skill_gap
+      # ── Master Resource Dimension (Profile, Manager & Employee Type) ──
+      - name: gold.dim_resource
         description: >-
-          Detailed view analyzing resource skill sets, utilization rates, and identifying
-          gaps between required counts and available resources.
+          Master resource dimension containing employee profiles, internal/external designation,
+          working hours, skills summary, pool summary, and reporting hierarchy (managers and direct reports).
+          Use this table to answer questions about managers, direct reports ('Who reports to Udara?'),
+          and employee types ('Show external resources').
         columns:
+          - name: resource_id
+            type: INTEGER
+          - name: person_id
+            type: VARCHAR
+            filterable: true
+            filter_code: person_id
+          - name: company_id
+            type: INTEGER
+            filterable: true
+            filter_code: company_id
           - name: company_name
             type: VARCHAR
             filterable: true
             filter_code: company_name
-          - name: skill_category_name
+          - name: division_id
+            type: INTEGER
+          - name: division_name
             type: VARCHAR
+            filterable: true
+            filter_code: division_name
+          - name: full_name
+            type: VARCHAR
+            description: "Resource's human full name. ALWAYS display full_name instead of raw IDs."
+            filterable: true
+            filter_code: full_name
+          - name: first_name
+            type: VARCHAR
+          - name: last_name
+            type: VARCHAR
+          - name: email
+            type: VARCHAR
+            filterable: true
+            filter_code: email
+          - name: resource_type
+            type: VARCHAR
+            description: "Employee type: 'Internal' or 'External'."
+            filterable: true
+            filter_code: resource_type
+          - name: daily_working_hours
+            type: INTEGER
+          - name: is_active
+            type: BOOLEAN
+            filterable: true
+            filter_code: is_active
+          - name: calendar_id
+            type: INTEGER
+          - name: calendar_name
+            type: VARCHAR
+          - name: reporting_resource_id
+            type: INTEGER
+          - name: reporting_resource_name
+            type: VARCHAR
+            description: "Name of the resource's direct manager/supervisor. Use for 'Who reports to <Name>?' or team queries."
+            filterable: true
+            filter_code: reporting_resource_name
+          - name: cost_rate
+            type: NUMBER
+          - name: rate_type
+            type: VARCHAR
+          - name: currency_code
+            type: VARCHAR
+          - name: currency_symbol
+            type: VARCHAR
+          - name: hourly_cost
+            type: NUMBER
+          - name: daily_cost
+            type: NUMBER
+          - name: skill_count
+            type: INTEGER
+          - name: avg_skill_stars
+            type: NUMBER
+          - name: skill_list
+            type: VARCHAR
+            description: "Comma-separated summary of skills held by this resource."
+            filterable: true
+            filter_code: skill_list
+          - name: pool_count
+            type: INTEGER
+          - name: pool_list
+            type: VARCHAR
+            description: "Comma-separated summary of pool memberships for this resource."
+            filterable: true
+            filter_code: pool_list
+
+        filter_columns:
+          company_id: company_id
+          company_name: company_name
+          division_name: division_name
+          full_name: full_name
+          email: email
+          resource_type: resource_type
+          is_active: is_active
+          reporting_resource_name: reporting_resource_name
+          person_id: person_id
+
+      # ── Bridge: Resource Skills ──
+      - name: gold.bridge_resource_skill
+        description: >-
+          Bridge table linking resources to skills, skill categories, levels, and star ratings.
+          Use this table to answer questions about which resources have specific skills or expertise.
+          Automatically joins gold.dim_resource on resource_id to retrieve full_name.
+        columns:
+          - name: resource_id
+            type: INTEGER
+          - name: skill_id
+            type: INTEGER
+          - name: person_id
+            type: VARCHAR
+            filterable: true
+            filter_code: person_id
+          - name: company_id
+            type: INTEGER
+            filterable: true
+            filter_code: company_id
           - name: skill_name
             type: VARCHAR
-          - name: resources_with_skill
-            type: NUMBER
-          - name: total_active_resources
-            type: NUMBER
-          - name: skill_utilization_pct
-            type: NUMBER
-          - name: required_count
-            type: NUMBER
-          - name: gap_count
-            type: NUMBER
-          - name: gap_status
+            description: "Name of the skill (e.g. Java, Python, Power BI)."
+            filterable: true
+            filter_code: skill_name
+          - name: skill_category_id
+            type: INTEGER
+          - name: skill_category_name
             type: VARCHAR
+            filterable: true
+            filter_code: skill_category_name
+          - name: skill_level_id
+            type: INTEGER
+          - name: skill_level_name
+            type: VARCHAR
+            description: "Proficiency level name (e.g. Expert, Intermediate)."
+            filterable: true
+            filter_code: skill_level_name
+          - name: star_count
+            type: INTEGER
+            description: "Star rating count for skill proficiency."
+          - name: level_default_stars
+            type: INTEGER
+
         filter_columns:
-          company_name: company_name
+          company_id: company_id
+          skill_name: skill_name
+          skill_category_name: skill_category_name
+          skill_level_name: skill_level_name
+          person_id: person_id
+          full_name: full_name
 
-    kpis:
-      average_utilization:
-        description: "Average resource utilization percentage"
-        formula: "AVG(utilization_pct)"
-        depends_on: ["utilization_pct"]
-        tags: ["Utilization", "Resources"]
-      total_monthly_cost:
-        description: "Total monthly cost of all resources"
-        formula: "SUM(monthly_cost)"
-        depends_on: ["monthly_cost"]
-        tags: ["Cost", "Resources"]
-
-  # ─────────────────────────────────────────────────────────────────────
-  # TICKET ANALYTICS
-  # ─────────────────────────────────────────────────────────────────────
-  ticket_analytics:
-    display_name: "Ticket Analytics"
-    description: >-
-      Helpdesk and ticketing metrics tracking resolution rates, SLA breaches,
-      ticket volumes, and response times.
-    domain_focus: >-
-      Support ticket volume, SLA tracking, resolution times, and support team performance.
-
-    tables:
-      - name: marts.vw_ticket_dashboard
+      # ── Bridge: Resource Pools ──
+      - name: gold.bridge_resource_pool
         description: >-
-          Aggregated ticketing data tracking volumes, SLAs, and resolution metrics.
+          Bridge table linking resources to resource pools, divisions, and pool owners.
+          Use this table to answer questions about resource pool memberships and assignments.
+          Automatically joins gold.dim_resource on resource_id to retrieve full_name.
         columns:
-          # ── Dimensions ──
-          - name: company_name
+          - name: resource_id
+            type: INTEGER
+          - name: resource_pool_id
+            type: INTEGER
+          - name: person_id
             type: VARCHAR
             filterable: true
-            filter_code: company_name
-          - name: ticket_space_name
+            filter_code: person_id
+          - name: company_id
+            type: INTEGER
+            filterable: true
+            filter_code: company_id
+          - name: resource_pool_name
+            type: VARCHAR
+            description: "Name of the resource pool."
+            filterable: true
+            filter_code: resource_pool_name
+          - name: division_id
+            type: INTEGER
+          - name: division_name
             type: VARCHAR
             filterable: true
-            filter_code: ticket_space_name
-          - name: ticket_type_name
-            type: VARCHAR
-          - name: ticket_type_color
-            type: VARCHAR
-          - name: priority_name
+            filter_code: division_name
+          - name: pool_owner_user_id
+            type: INTEGER
+          - name: pool_owner_name
             type: VARCHAR
             filterable: true
-            filter_code: priority_name
-          - name: priority_color
+            filter_code: pool_owner_name
+          - name: is_pool_active
+            type: BOOLEAN
+            filterable: true
+            filter_code: is_pool_active
+
+        filter_columns:
+          company_id: company_id
+          resource_pool_name: resource_pool_name
+          division_name: division_name
+          pool_owner_name: pool_owner_name
+          is_pool_active: is_pool_active
+          person_id: person_id
+          full_name: full_name
+
+      # ── Fact: Resource Day (Multi-Week & Future Capacity Planning) ──
+      - name: gold.fct_resource_day
+        description: >-
+          Daily resource allocation, capacity, and logged effort ledger.
+          Use this table for multi-week comparisons and future capacity questions
+          (e.g. 'Who can take 16 hours next week?', 'Available capacity next week').
+          Automatically joins gold.dim_resource on resource_id to retrieve full_name.
+          Free hours is calculated as (capacity_hrs - planned_hrs).
+        columns:
+          - name: resource_day_id
             type: VARCHAR
-          - name: status_name
-            type: VARCHAR
-          - name: status_base
+          - name: resource_id
+            type: INTEGER
+          - name: person_id
             type: VARCHAR
             filterable: true
-            filter_code: status_base
-          - name: queue_name
-            type: VARCHAR
+            filter_code: person_id
+          - name: company_id
+            type: INTEGER
             filterable: true
-            filter_code: queue_name
-            
-          # ── Time Dimensions ──
-          - name: created_date
+            filter_code: company_id
+          - name: date_day
             type: DATE
             time_dimension: true
-            
-          # ── Measures ──
-          - name: ticket_count
+            filterable: true
+            filter_code: date_day
+          - name: company_week_start_date
+            type: DATE
+            time_dimension: true
+            filterable: true
+            filter_code: company_week_start_date
+          - name: is_working_day
+            type: BOOLEAN
+            filterable: true
+            filter_code: is_working_day
+          - name: working_day_fraction
             type: NUMBER
-          - name: overdue_count
+          - name: capacity_hrs
             type: NUMBER
-          - name: resolved_count
+          - name: planned_hrs
             type: NUMBER
-          - name: sla_response_breach_count
+          - name: overdue_hrs
             type: NUMBER
-          - name: avg_resolution_hrs
+          - name: undated_hrs
             type: NUMBER
-          - name: resolution_rate_pct
+          - name: logged_hrs
             type: NUMBER
+          - name: rate_type
+            type: VARCHAR
+          - name: currency_code
+            type: VARCHAR
+          - name: hourly_rate
+            type: NUMBER
+          - name: capacity_cost
+            type: NUMBER
+          - name: logged_cost
+            type: NUMBER
+          - name: as_of_date
+            type: DATE
+            time_dimension: true
 
         filter_columns:
-          company_name: company_name
-          ticket_space_name: ticket_space_name
-          priority_name: priority_name
-          status_base: status_base
-          queue_name: queue_name
-
-      - name: marts.vw_ticket_workload
-        description: >-
-          Workload analysis per assignee, identifying how many tickets are assigned,
-          allocated effort, overdue status, and total capacity.
-        columns:
-          - name: company_name
-            type: VARCHAR
-            filterable: true
-            filter_code: company_name
-          - name: ticket_space_name
-            type: VARCHAR
-            filterable: true
-            filter_code: ticket_space_name
-          - name: assignee_name
-            type: VARCHAR
-          - name: assigned_ticket_count
-            type: NUMBER
-          - name: allocated_effort_hrs
-            type: NUMBER
-          - name: overdue_count
-            type: NUMBER
-          - name: utilization_pct
-            type: NUMBER
-          - name: workload_status
-            type: VARCHAR
-        filter_columns:
-          company_name: company_name
-          ticket_space_name: ticket_space_name
+          company_id: company_id
+          date_day: date_day
+          company_week_start_date: company_week_start_date
+          is_working_day: is_working_day
+          person_id: person_id
+          full_name: full_name
 
     kpis:
-      resolution_rate:
-        description: "Overall ticket resolution rate"
-        formula: "SUM(resolved_count) / NULLIF(SUM(ticket_count), 0) * 100"
-        depends_on: ["resolved_count", "ticket_count"]
-        tags: ["Resolution", "Tickets"]
-      total_sla_breaches:
-        description: "Total number of SLA response breaches"
-        formula: "SUM(sla_response_breach_count)"
-        depends_on: ["sla_response_breach_count"]
-        tags: ["SLA", "Tickets"]
+      average_planned_utilization:
+        description: "Average planned resource utilization percentage"
+        formula: "AVG(planned_utilization_pct)"
+        depends_on: ["planned_utilization_pct"]
+        tags: ["Utilization", "Resources"]
+      total_capacity_hours:
+        description: "Total available working capacity in hours"
+        formula: "SUM(capacity_hrs)"
+        depends_on: ["capacity_hrs"]
+        tags: ["Capacity", "Resources"]
+      total_planned_hours:
+        description: "Total planned workload effort in hours"
+        formula: "SUM(planned_hrs)"
+        depends_on: ["planned_hrs"]
+        tags: ["Workload", "Resources"]
+      total_free_hours:
+        description: "Total remaining free capacity in hours"
+        formula: "SUM(free_hrs)"
+        depends_on: ["free_hrs"]
+        tags: ["Availability", "Resources"]
