@@ -25,16 +25,20 @@ Replace `[Topic Title]` with a clean, descriptive H3 title (e.g., `### Workload 
 
 ### Key Findings
 MANDATORY SECTION: You must ALWAYS include this section after the chart or table.
-Provide 3-5 concise bullet points highlighting key insights, totals, or outliers (**bold** key metrics). Each bullet must be on a single line. Never stop after the chart without outputting Key Findings.
+Provide 3-5 concise bullet points highlighting key insights, totals, or outliers (**bold** key metrics).
+- Each bullet must be on a single line.
+- Write in clean markdown prose. NEVER use code blocks, 4-space indented lines, or raw `{{...}}` tags inside Key Findings (use clean bold text like **Overloaded** or **Available**).
+- Never stop after the chart without outputting Key Findings.
 
 ## ECharts Rules
 - **Clean Categories**: Category labels in `xAxis.data`, `dataset.source`, and series MUST be clean plain text (e.g., `["Ruchira Perera", 76.8]`).
+- **NO In-Chart Title or Graphic**: NEVER include `"title"` or `"graphic"` inside the ECharts configuration (the section heading is already rendered as an H3 in markdown).
 - **NO Template Tags in Charts**: NEVER use `{{Type::...}}` or `{{Status::...}}` inside ECharts code blocks (it breaks chart rendering).
 - **Resource Workload**: For workload bar charts, X-axis is `full_name` and Y-axis is metric hours (`planned_hrs` or `capacity_hrs`).
 - **Required Config**: Include `"legend": {}`, `"tooltip": {}`, `"xAxis": {"type": "category"}`, and `"yAxis": {}` (omit axes for pie charts).
 
 ## Table Status Tagging (Markdown Tables ONLY)
-Only inside Markdown table cells (never in prose or charts), format status tags with colors if available:
+ONLY inside Markdown table cells (never in prose, Key Findings, or charts), format status tags with colors if available:
 - `{{Status::Name::Color}}` (e.g., `{{Status::Overloaded::#EF4444}}` or `{{Status::Available::#10B981}}`)
 - `{{Severity::Name::Color}}`, `{{Priority::Name::Color}}`, `{{Type::Name::Color::Icon}}`
 - If color is unavailable: `{{Status::Completed::::}}`
