@@ -15,10 +15,12 @@ class AgentResult(BaseModel):
     data: str
 
 class InsightAgent:
-    def __init__(self, key: str):
+    def __init__(self, key: str, worker_model: Optional[str] = None, orchestrator_model: Optional[str] = None):
+        self.worker_model = worker_model or os.getenv("WORKER_MODEL", "gemini-2.0-flash-001")
+        self.orchestrator_model = orchestrator_model or os.getenv("ORCHESTRATOR_MODEL", "typesafe/jev-1.13")
+
         self.llm = ChatOpenAI(
-            model="openai/gpt-4o-mini",
-            # model="nvidia/nemotron-3-nano-30b-a3b",
+            model=self.worker_model,
             api_key=key,
             temperature=0,
             base_url="https://openrouter.ai/api/v1",
@@ -26,7 +28,7 @@ class InsightAgent:
         )
         
         self.orchestrator_llm = ChatOpenAI(
-            model="typesafe/jev-1.13",
+            model=self.orchestrator_model,
             api_key=key,
             temperature=0,
             base_url="https://openrouter.ai/api/v1",

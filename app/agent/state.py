@@ -28,5 +28,5 @@ class AgentState(TypedDict, total=False):
     scope: Optional[UserScope]
 
 import contextvars
-global_token_usage = contextvars.ContextVar("global_token_usage", default=[0])
+global_token_usage = contextvars.ContextVar("global_token_usage", default=[0, 0, 0])
 

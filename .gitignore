@@ -17,6 +17,6 @@ venv.bak/
 .vscode/
 
 # Logs & Data
-logs/
 *.csv
+scripts/benchmark/
 

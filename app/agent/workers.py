@@ -19,7 +19,7 @@ from app.agent.prompts import (
     get_worker_user_context,
 )
 
-def print_usage(node_name: str, response, elapsed: float = 0.0):
+def print_usage(node_name: str, response, elapsed: float = 0.0, question: str = ""):
     total = 0
     try:
         usage = getattr(response, "usage_metadata", None)
@@ -38,26 +38,31 @@ def print_usage(node_name: str, response, elapsed: float = 0.0):
             in_tokens = usage.get("input_tokens", usage.get("prompt_tokens", 0))
             out_tokens = usage.get("output_tokens", usage.get("completion_tokens", 0))
             total = usage.get("total_tokens", 0)
-            time_str = f" | Time: {elapsed:.2f}s" if elapsed > 0 else ""
             print(f"Token Usage - In: {in_tokens} | Out: {out_tokens} | Total: {total}{time_str}")
-            global_token_usage.get()[0] += total
+            usage_list = global_token_usage.get()
+            usage_list[0] += total
+            if len(usage_list) >= 3:
+                usage_list[1] += in_tokens
+                usage_list[2] += out_tokens
             
             # Log to CSV
             import os
             import csv
             from datetime import datetime
             
-            os.makedirs("logs", exist_ok=True)
-            csv_file = os.path.join("logs", "llm_benchmark_logs.csv")
+            output_dir = os.path.join("scripts", "benchmark")
+            os.makedirs(output_dir, exist_ok=True)
+            csv_file = os.path.join(output_dir, "benchmark_models_node_wise.csv")
             file_exists = os.path.isfile(csv_file)
             
             with open(csv_file, mode='a', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
                 if not file_exists:
-                    writer.writerow(["Timestamp", "Node", "Model", "In Tokens", "Out Tokens", "Total Tokens", "Time (s)"])
+                    writer.writerow(["Timestamp", "Question", "Node", "Model", "In Tokens", "Out Tokens", "Total Tokens", "Time (s)"])
                 
                 writer.writerow([
                     datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    question,
                     node_name,
                     model_name,
                     in_tokens,
@@ -292,7 +297,7 @@ def make_worker_node(llm: ChatOpenAI, domain: str, tool_func):
             else:
                 print(f"Output: {response.content}")
                 
-            print_usage(domain, response, elapsed)
+            print_usage(domain, response, elapsed, question=user_query)
             print()
             
             return {"messages": [response]}
@@ -384,7 +389,7 @@ def make_formatter_node(llm: ChatOpenAI):
             elapsed = time.time() - start_time
             
             print("Completed!")
-            print_usage("FORMATTER", response, elapsed)
+            print_usage("FORMATTER", response, elapsed, question=user_query)
             
             return {"messages": [response]}
         except Exception as e:

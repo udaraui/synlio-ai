@@ -20,7 +20,7 @@ from app.agent.graph import create_graph
 def main():
     print("Compiling LangGraph state graph...")
     # Dummy LLM instance is sufficient to construct the graph schema
-    dummy_llm = ChatOpenAI(model="gpt-4o-mini", api_key=os.getenv("OPENROUTER_API_KEY", "dummy"))
+    dummy_llm = ChatOpenAI(model="gemini-2.0-flash-001", api_key=os.getenv("OPENROUTER_API_KEY", "dummy"))
     compiled_graph = create_graph(dummy_llm)
     graph = compiled_graph.get_graph()
 
