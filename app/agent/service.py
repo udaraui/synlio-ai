@@ -52,6 +52,7 @@ class InsightAgent:
             "user_email": user_email,
             "company_id": company_id,
             "scope": scope,
+            "error_message": None,
         }
         response = await self.agent_executor.ainvoke(input_state, config=config)
         output = response["messages"][-1].content
@@ -86,6 +87,7 @@ class InsightAgent:
             "user_email": user_email,
             "company_id": company_id,
             "scope": scope,
+            "error_message": None,
         }
         
         # stream_mode multiple yields (stream_mode, data) in newer langgraph

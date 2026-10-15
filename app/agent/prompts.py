@@ -83,8 +83,15 @@ def get_worker_prompt(domain_name: str) -> str:
         for table in domain_data["tables"]:
             min_table = {"name": table.get("name")}
             if "columns" in table:
-                # Keep only column names as a simple list of strings
-                min_table["columns"] = [col.get("name") for col in table.get("columns", []) if isinstance(col, dict) and col.get("name")]
+                cols = []
+                for col in table.get("columns", []):
+                    if isinstance(col, dict) and col.get("name"):
+                        desc = col.get("description")
+                        if desc:
+                            cols.append({col["name"]: desc})
+                        else:
+                            cols.append(col["name"])
+                min_table["columns"] = cols
             minified_tables.append(min_table)
         minified_domain_data["tables"] = minified_tables
         

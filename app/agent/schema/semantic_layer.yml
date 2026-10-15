@@ -196,7 +196,7 @@ modules:
             type: INTEGER
           - name: reporting_resource_name
             type: VARCHAR
-            description: "Name of the resource's direct manager/supervisor. Use for 'Who reports to <Name>?' or team queries."
+            description: "Name of the resource's direct manager/supervisor. Use ONLY for reporting hierarchy (e.g. 'Who reports to Kasun?'). Do NOT use for team or resource group queries."
             filterable: true
             filter_code: reporting_resource_name
           - name: cost_rate
@@ -217,14 +217,14 @@ modules:
             type: NUMBER
           - name: skill_list
             type: VARCHAR
-            description: "Comma-separated summary of skills held by this resource."
+            description: "Comma-separated summary of skills held by this resource. Use for questions about employee skills (e.g. 'What skills do external resources have?')."
             filterable: true
             filter_code: skill_list
           - name: pool_count
             type: INTEGER
           - name: pool_list
             type: VARCHAR
-            description: "Comma-separated summary of pool memberships for this resource."
+            description: "Comma-separated summary of pool/team memberships for this resource (e.g. 'Synlio Team')."
             filterable: true
             filter_code: pool_list
 
@@ -311,7 +311,7 @@ modules:
             filter_code: company_id
           - name: resource_pool_name
             type: VARCHAR
-            description: "Name of the resource pool."
+            description: "Name of the resource group / team (e.g. 'Synlio Team')."
             filterable: true
             filter_code: resource_pool_name
           - name: division_id
@@ -324,6 +324,7 @@ modules:
             type: INTEGER
           - name: pool_owner_name
             type: VARCHAR
+            description: "Owner/lead of the resource pool/group. Use when asked about a person's team or resource group (e.g. 'Kasun's team', 'Kasun's resource group')."
             filterable: true
             filter_code: pool_owner_name
           - name: is_pool_active

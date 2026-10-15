@@ -180,7 +180,8 @@ def make_orchestrator_node(llm: ChatOpenAI):
                 "active_workers": domains,
                 "current_round": current_round,
                 "retry_feedback": retry_feedback,
-                "needs_retry": False
+                "needs_retry": False,
+                "error_message": None,
             }
         except Exception as e:
             error_str = str(e)
@@ -319,7 +320,7 @@ def make_formatter_node(llm: ChatOpenAI):
             response = AIMessage(content=state["error_message"])
             print(f"Completed! (Error: {state['error_message']})")
             print()
-            return {"messages": [response]}
+            return {"messages": [response], "error_message": None}
         
         # Inlined Extraction: extract tool outputs directly from recent ToolMessages
         tool_map = {
