@@ -9,9 +9,11 @@ from app.agent.state import AgentState
 from app.agent.tools import query_project_data, query_ticket_data, query_resource_data
 from app.agent.workers import make_orchestrator_node, make_worker_node, make_formatter_node
 
-def create_graph(llm: ChatOpenAI, orchestrator_llm: ChatOpenAI = None):
+def create_graph(llm: ChatOpenAI, orchestrator_llm: ChatOpenAI = None, formatter_llm: ChatOpenAI = None):
     if orchestrator_llm is None:
         orchestrator_llm = llm
+    if formatter_llm is None:
+        formatter_llm = llm
         
     orchestrator = make_orchestrator_node(orchestrator_llm)
     
@@ -147,7 +149,7 @@ def create_graph(llm: ChatOpenAI, orchestrator_llm: ChatOpenAI = None):
                 "needs_retry": False
             }
 
-    formatter = make_formatter_node(llm)
+    formatter = make_formatter_node(formatter_llm)
     
     # -------------------------------------------------------------------------
     # Graph Construction (4 Nodes)

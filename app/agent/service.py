@@ -16,10 +16,20 @@ class AgentResult(BaseModel):
 
 class InsightAgent:
     def __init__(self, key: str, worker_model: Optional[str] = None, orchestrator_model: Optional[str] = None):
-        self.worker_model = worker_model or os.getenv("WORKER_MODEL", "gemini-2.0-flash-001")
+        self.worker_model = worker_model or os.getenv("WORKER_MODEL", "google/gemini-2.5-flash-lite")
         self.orchestrator_model = orchestrator_model or os.getenv("ORCHESTRATOR_MODEL", "typesafe/jev-1.13")
 
-        self.llm = ChatOpenAI(
+        # Worker LLM: streaming=False prevents OpenRouter SSE stream hangs on tool calling
+        self.worker_llm = ChatOpenAI(
+            model=self.worker_model,
+            api_key=key,
+            temperature=0,
+            base_url="https://openrouter.ai/api/v1",
+            streaming=False
+        )
+
+        # Formatter LLM: streaming=True enables token-by-token streaming to the UI
+        self.formatter_llm = ChatOpenAI(
             model=self.worker_model,
             api_key=key,
             temperature=0,
@@ -32,11 +42,17 @@ class InsightAgent:
             api_key=key,
             temperature=0,
             base_url="https://openrouter.ai/api/v1",
-            streaming=True
+            streaming=False
         )
+
+        self.llm = self.worker_llm
         
         # Build and compile the graph
-        self.agent_executor = create_graph(self.llm, self.orchestrator_llm)
+        self.agent_executor = create_graph(
+            llm=self.worker_llm,
+            orchestrator_llm=self.orchestrator_llm,
+            formatter_llm=self.formatter_llm
+        )
 
     async def arun(
         self,
@@ -74,7 +90,7 @@ class InsightAgent:
     ):
         from app.agent.state import global_token_usage
         import time
-        global_token_usage.set([0])
+        global_token_usage.set([0, 0, 0])
         start_time = time.time()
         
         table_content = ""

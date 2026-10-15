@@ -38,6 +38,7 @@ def print_usage(node_name: str, response, elapsed: float = 0.0, question: str = 
             in_tokens = usage.get("input_tokens", usage.get("prompt_tokens", 0))
             out_tokens = usage.get("output_tokens", usage.get("completion_tokens", 0))
             total = usage.get("total_tokens", 0)
+            time_str = f" | Time: {elapsed:.2f}s" if elapsed else ""
             print(f"Token Usage - In: {in_tokens} | Out: {out_tokens} | Total: {total}{time_str}")
             usage_list = global_token_usage.get()
             usage_list[0] += total
@@ -286,7 +287,10 @@ def make_worker_node(llm: ChatOpenAI, domain: str, tool_func):
         start_time = time.time()
         
         try:
-            response = await llm_with_tools.ainvoke(messages, config=config)
+            # Overwrite callbacks with an empty CallbackManager so LangGraph's astream(stream_mode=["messages"])
+            # never forces SSE streaming onto worker tool calling
+            from langchain_core.callbacks import CallbackManager
+            response = await llm_with_tools.ainvoke(messages, config={"callbacks": CallbackManager([])})
             elapsed = time.time() - start_time
             
             # Log the output tool calls or response
