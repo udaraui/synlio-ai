@@ -9,6 +9,7 @@ from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field
 
 from app.agent.state import AgentState, global_token_usage
+from app.agent.tools import get_db_engine
 from app.agent.prompts import (
     ORCHESTRATOR_SYSTEM_PROMPT,
     ORCHESTRATOR_QUESTIONS,
@@ -221,7 +222,7 @@ def make_worker_node(llm: ChatOpenAI, domain: str, tool_func):
             try:
                 pg_db_url = os.getenv("PG_DB_URL")
                 if pg_db_url:
-                    engine = create_engine(pg_db_url)
+                    engine = get_db_engine(pg_db_url)
                     with engine.connect() as conn:
                         if company_id is not None:
                             q = text("SELECT full_name, reporting_resource_name, pool_list FROM gold.dim_resource WHERE email = :e AND company_id = :c LIMIT 1")

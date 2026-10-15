@@ -86,6 +86,24 @@ def _get_table_columns(conn, table_name: str) -> set[str]:
         print(f"[TOOL] Could not retrieve column schema for {table_name}: {e}")
         return set()
 
+def get_db_engine(url: str):
+    if not url:
+        return None
+    normalized = url.strip()
+    if normalized.startswith("postgres://"):
+        normalized = "postgresql://" + normalized[len("postgres://"):]
+    try:
+        return create_engine(normalized)
+    except Exception as e:
+        err_msg = str(e)
+        if "psycopg" in err_msg and "postgresql+psycopg://" in normalized:
+            return create_engine(normalized.replace("postgresql+psycopg://", "postgresql+psycopg2://"))
+        if "psycopg2" in err_msg and "postgresql+psycopg2://" in normalized:
+            return create_engine(normalized.replace("postgresql+psycopg2://", "postgresql+psycopg://"))
+        if "psycopg" in err_msg and normalized.startswith("postgresql://"):
+            return create_engine(normalized.replace("postgresql://", "postgresql+psycopg2://", 1))
+        raise
+
 def _build_and_execute_sql(
     table_name: str, 
     columns: list[str], 
@@ -100,7 +118,7 @@ def _build_and_execute_sql(
         return "Error: PG_DB_URL not configured."
     
     try:
-        engine = create_engine(pg_db_url)
+        engine = get_db_engine(pg_db_url)
         with engine.connect() as conn:
             dim_cols = [
                 "reporting_resource_name", "reporting_resource_id", "pool_list",
