@@ -94,7 +94,7 @@ class InsightAgent:
         start_time = time.time()
         
         table_content = ""
-        yield "__REPLACE__Synlio is thinking"
+        yield "__REPLACE__Checking what you need..."
         
         formatter_started = False
         config = {"configurable": {"thread_id": conversation_id or "default"}}
@@ -108,11 +108,33 @@ class InsightAgent:
             "error_message": None,
         }
         
+        domain_display_names = {
+            "resource_analytics": "resource workload",
+            "project_analytics": "projects",
+            "ticket_analytics": "tickets",
+        }
+
         # stream_mode multiple yields (stream_mode, data) in newer langgraph
-        async for item in self.agent_executor.astream(input_state, config=config, stream_mode=["messages"]):
+        async for item in self.agent_executor.astream(input_state, config=config, stream_mode=["updates", "messages"]):
             if isinstance(item, tuple) and len(item) == 2:
                 mode, payload = item
-                if mode == "messages":
+                if mode == "updates" and isinstance(payload, dict):
+                    for node_name, node_output in payload.items():
+                        if node_name == "orchestrator":
+                            active_workers = node_output.get("active_workers", [])
+                            if active_workers:
+                                domain_labels = [domain_display_names.get(d, d.replace('_analytics', '')) for d in active_workers]
+                                yield f"__REPLACE__Gathering details on {', '.join(domain_labels)}..."
+                            else:
+                                yield "__REPLACE__Gathering details..."
+                        elif node_name == "workers":
+                            yield "__REPLACE__Connecting the data points..."
+                        elif node_name == "tool_executor":
+                            if node_output.get("needs_retry"):
+                                yield "__REPLACE__Double-checking the details..."
+                            else:
+                                yield "__REPLACE__Almost ready, Writing up your insights..."
+                elif mode == "messages":
                     chunk, metadata = payload
                     if getattr(chunk, "type", "") == "tool" and chunk.content:
                         if "Query returned zero rows" not in chunk.content:
