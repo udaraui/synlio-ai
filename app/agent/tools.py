@@ -1,6 +1,7 @@
 import os
 import time
 import json
+import re
 from sqlalchemy import create_engine, text
 from langchain_core.tools import tool
 from dotenv import load_dotenv
@@ -137,6 +138,25 @@ def _build_and_execute_sql(
             # Filter out raw IDs (person_id, resource_id, company_id) so the user only sees human names and meaningful metrics
             cleaned_cols = [c for c in (columns or []) if not (c.endswith('_id') or c in ['id', 'person_id', 'company_id'])]
             
+            is_fct_day = (table_name == "gold.fct_resource_day")
+            # Aggregation mode for gold.fct_resource_day: if daily grain columns (date_day, resource_day_id) are not requested,
+            # we aggregate over the timeframe (e.g. weekly or multi-week capacity per resource) to prevent duplicate daily rows.
+            is_fct_aggregated = is_fct_day and not any(c in cleaned_cols for c in ["date_day", "resource_day_id"])
+
+            fct_aggregations = {
+                "capacity_hrs": "SUM(b.capacity_hrs) AS capacity_hrs",
+                "planned_hrs": "SUM(b.planned_hrs) AS planned_hrs",
+                "logged_hrs": "SUM(b.logged_hrs) AS logged_hrs",
+                "overdue_hrs": "SUM(b.overdue_hrs) AS overdue_hrs",
+                "undated_hrs": "SUM(b.undated_hrs) AS undated_hrs",
+                "free_hrs": "SUM(b.capacity_hrs - b.planned_hrs) AS free_hrs",
+                "available_hrs": "SUM(b.capacity_hrs - b.planned_hrs) AS free_hrs",
+                "capacity_cost": "SUM(b.capacity_cost) AS capacity_cost",
+                "logged_cost": "SUM(b.logged_cost) AS logged_cost",
+            }
+
+            group_by_cols = ["r.resource_id", "r.full_name"]
+
             if is_resource_table:
                 if 'full_name' not in cleaned_cols:
                     cleaned_cols.insert(0, 'full_name')
@@ -144,15 +164,27 @@ def _build_and_execute_sql(
                 formatted_cols = []
                 for col in cleaned_cols:
                     if col == 'full_name':
-                        if table_cols and 'full_name' in table_cols:
+                        if table_cols and 'full_name' in table_cols and not is_fct_day:
                             formatted_cols.append("b.full_name")
                         else:
                             formatted_cols.append("r.full_name AS full_name")
+                    elif is_fct_aggregated and col in fct_aggregations:
+                        formatted_cols.append(fct_aggregations[col])
+                    elif is_fct_day and not is_fct_aggregated and col in ["free_hrs", "available_hrs"]:
+                        formatted_cols.append("(b.capacity_hrs - b.planned_hrs) AS free_hrs")
                     elif col in dim_cols:
                         actual_col = "pool_list" if col == "resource_pool_name" else col
                         formatted_cols.append(f"r.{actual_col}")
+                        if is_fct_aggregated:
+                            group_by_cols.append(f"r.{actual_col}")
+                    elif col == "company_week_start_date":
+                        formatted_cols.append("b.company_week_start_date")
+                        if is_fct_aggregated:
+                            group_by_cols.append("b.company_week_start_date")
                     elif table_cols and col in table_cols:
                         formatted_cols.append(f"b.{col}")
+                        if is_fct_aggregated and col not in fct_aggregations:
+                            group_by_cols.append(f"b.{col}")
                     elif not table_cols:
                         formatted_cols.append(f"b.{col}")
                     else:
@@ -164,26 +196,68 @@ def _build_and_execute_sql(
                 valid_cols = [c for c in cleaned_cols if (not table_cols or c in table_cols)]
                 cols_str = ", ".join(valid_cols) if valid_cols else "*"
             
-            # Build the WHERE clause safely
+            # Deduplicate group_by_cols while preserving order
+            group_by_cols = list(dict.fromkeys(group_by_cols))
+
+            # Build the WHERE and HAVING clauses safely
             filter_clauses = []
+            having_clauses = []
+            has_date_filter = False
+
             if filters:
                 for key, value in filters.items():
-                    if is_resource_table and (key in dim_cols or key == "full_name" or (table_cols and key in table_cols)):
+                    # If company_id is provided in security context, avoid duplicate/conflicting filter
+                    if key == "company_id" and company_id is not None:
+                        continue
+
+                    # Handle aggregated metric filters (e.g. free_hrs >= 16)
+                    if is_fct_aggregated and key in ["free_hrs", "available_hrs", "capacity_hrs", "planned_hrs", "logged_hrs", "overdue_hrs", "undated_hrs"]:
+                        metric_expr = "SUM(b.capacity_hrs - b.planned_hrs)" if key in ["free_hrs", "available_hrs"] else f"SUM(b.{key})"
+                        if isinstance(value, str):
+                            comp_match = re.match(r"^(>=|<=|>|<|!=|<>|=)?\s*(-?\d+(?:\.\d+)?)$", value.strip())
+                            if comp_match:
+                                op, num = comp_match.groups()
+                                op = op or "="
+                                having_clauses.append(f"{metric_expr} {op} {num}")
+                            else:
+                                having_clauses.append(f"{metric_expr} = {value.strip()}")
+                        elif isinstance(value, (int, float)):
+                            having_clauses.append(f"{metric_expr} = {value}")
+                        continue
+
+                    # Check relative date filters
+                    if key in ["company_week_start_date", "date_day", "date", "week", "week_start_date"] and isinstance(value, str):
+                        v_lower = value.strip().lower()
+                        has_date_filter = True
+                        target_col = "b.company_week_start_date" if (is_resource_table and "company_week_start_date" in table_cols) else ("b.date_day" if "date_day" in table_cols else (f"b.{key}" if is_resource_table else key))
+                        if v_lower in ["next_week", "next week"]:
+                            filter_clauses.append(f"{target_col} = (DATE_TRUNC('week', CURRENT_DATE) + INTERVAL '1 week')::date")
+                            continue
+                        elif v_lower in ["this_week", "this week", "current_week", "current week"]:
+                            filter_clauses.append(f"{target_col} = DATE_TRUNC('week', CURRENT_DATE)::date")
+                            continue
+                        elif v_lower in ["last_week", "last week", "previous_week"]:
+                            filter_clauses.append(f"{target_col} = (DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '1 week')::date")
+                            continue
+
+                    if key in ["company_week_start_date", "date_day"]:
+                        has_date_filter = True
+
+                    if is_resource_table and (key in dim_cols or key == "full_name" or (table_cols and key in table_cols) or (is_fct_day and key in ["free_hrs", "available_hrs"])):
                         pass
                     elif table_cols and key not in table_cols:
                         print(f"[TOOL] Notice: Dropping filter on non-existent column '{key}' for table '{table_name}'")
-                        continue
-                    # If company_id is provided in security context, avoid duplicate/conflicting filter
-                    if key == "company_id" and company_id is not None:
                         continue
 
                     # Column expression (prefix with b. or r.)
                     if is_resource_table:
                         if key == "full_name":
-                            col_expr = "b.full_name" if (table_cols and "full_name" in table_cols) else "r.full_name"
+                            col_expr = "b.full_name" if (table_cols and "full_name" in table_cols and not is_fct_day) else "r.full_name"
                         elif key in dim_cols:
                             actual_col = "pool_list" if key == "resource_pool_name" else key
                             col_expr = f"r.{actual_col}"
+                        elif is_fct_day and not is_fct_aggregated and key in ["free_hrs", "available_hrs"]:
+                            col_expr = "(b.capacity_hrs - b.planned_hrs)"
                         else:
                             col_expr = f"b.{key}"
                     else:
@@ -195,11 +269,14 @@ def _build_and_execute_sql(
                         filter_clauses.append(f"{col_expr} ILIKE '{value}'")
                     elif isinstance(value, str):
                         val_trimmed = value.strip()
-                        import re
                         comp_match = re.match(r"^(>=|<=|>|<|!=|<>)\s*(-?\d+(?:\.\d+)?)$", val_trimmed)
+                        date_comp_match = re.match(r"^(>=|<=|>|<|!=|<>)\s*(\d{4}-\d{2}-\d{2})$", val_trimmed)
                         if comp_match:
                             op, num = comp_match.groups()
                             filter_clauses.append(f"{col_expr} {op} {num}")
+                        elif date_comp_match:
+                            op, d_val = date_comp_match.groups()
+                            filter_clauses.append(f"{col_expr} {op} '{d_val}'")
                         elif val_trimmed.upper() in ["IS NULL", "IS NOT NULL"]:
                             filter_clauses.append(f"{col_expr} {val_trimmed.upper()}")
                         else:
@@ -208,6 +285,10 @@ def _build_and_execute_sql(
                         filter_clauses.append(f"{col_expr} = {'TRUE' if value else 'FALSE'}")
                     else:
                         filter_clauses.append(f"{col_expr} = {value}")
+
+            # Fallback date filter for fct_resource_day to prevent scanning historical records
+            if is_fct_day and not has_date_filter:
+                filter_clauses.append("b.company_week_start_date >= DATE_TRUNC('week', CURRENT_DATE)::date")
 
             # =========================================================================
             # MANDATORY COMPANY FILTER ENFORCEMENT
@@ -229,8 +310,24 @@ def _build_and_execute_sql(
             if filter_clauses:
                 where_clause = " WHERE " + " AND ".join(filter_clauses)
             
+            group_by_clause = f" GROUP BY {', '.join(group_by_cols)}" if is_fct_aggregated else ""
+            having_clause = f" HAVING {' AND '.join(having_clauses)}" if (is_fct_aggregated and having_clauses) else ""
+
+            order_by_clause = ""
+            if is_fct_aggregated:
+                if "free_hrs" in cols_str:
+                    order_by_clause = " ORDER BY free_hrs DESC"
+                elif "capacity_hrs" in cols_str:
+                    order_by_clause = " ORDER BY capacity_hrs DESC"
+                else:
+                    order_by_clause = " ORDER BY r.full_name ASC"
+
             # 1. First get total count
-            count_sql = f"SELECT COUNT(*) FROM {from_clause}{where_clause};"
+            if is_fct_aggregated:
+                count_sql = f"SELECT COUNT(*) FROM (SELECT r.resource_id FROM {from_clause}{where_clause}{group_by_clause}{having_clause}) sub;"
+            else:
+                count_sql = f"SELECT COUNT(*) FROM {from_clause}{where_clause};"
+
             print("[TOOL]===============================================================")
             print("Checking total count query:")
             print(count_sql)
@@ -250,7 +347,7 @@ def _build_and_execute_sql(
                 is_sampled = True
                 limit_clause = f" LIMIT {SAMPLE_LIMIT}"
                 
-            data_sql = f"SELECT {cols_str} FROM {from_clause}{where_clause}{limit_clause};"
+            data_sql = f"SELECT {cols_str} FROM {from_clause}{where_clause}{group_by_clause}{having_clause}{order_by_clause}{limit_clause};"
             print("Executing data query:")
             print(data_sql)
             print(f"Force: {force} | Sampled (Limit {SAMPLE_LIMIT}): {is_sampled}")

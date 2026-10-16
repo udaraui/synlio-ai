@@ -344,11 +344,11 @@ modules:
       # ── Fact: Resource Day (Multi-Week & Future Capacity Planning) ──
       - name: gold.fct_resource_day
         description: >-
-          Daily resource allocation, capacity, and logged effort ledger.
+          Daily and weekly resource allocation, capacity, and logged effort ledger.
           Use this table for multi-week comparisons and future capacity questions
-          (e.g. 'Who can take 16 hours next week?', 'Available capacity next week').
-          Automatically joins gold.dim_resource on resource_id to retrieve full_name.
-          Free hours is calculated as (capacity_hrs - planned_hrs).
+          (e.g. 'Who can take 16 hours next week?', 'Available capacity next week', 'Who has time next week').
+          Automatically joins gold.dim_resource on resource_id to retrieve full_name and pool_list.
+          Free hours is calculated as free_hrs (capacity_hrs - planned_hrs).
         columns:
           - name: resource_day_id
             type: VARCHAR
@@ -362,6 +362,16 @@ modules:
             type: INTEGER
             filterable: true
             filter_code: company_id
+          - name: full_name
+            type: VARCHAR
+            description: "Resource full name"
+            filterable: true
+            filter_code: full_name
+          - name: pool_list
+            type: VARCHAR
+            description: "Resource pool / team names"
+            filterable: true
+            filter_code: pool_list
           - name: date_day
             type: DATE
             time_dimension: true
@@ -370,6 +380,7 @@ modules:
           - name: company_week_start_date
             type: DATE
             time_dimension: true
+            description: "Monday week start date. Accepts 'next_week', 'this_week', 'last_week', or date string"
             filterable: true
             filter_code: company_week_start_date
           - name: is_working_day
@@ -380,14 +391,27 @@ modules:
             type: NUMBER
           - name: capacity_hrs
             type: NUMBER
+            description: "Total resource capacity hours"
+            filterable: true
+            filter_code: capacity_hrs
           - name: planned_hrs
             type: NUMBER
+            description: "Planned / booked project hours"
+            filterable: true
+            filter_code: planned_hrs
+          - name: free_hrs
+            type: NUMBER
+            description: "Free / available hours (capacity_hrs - planned_hrs)"
+            filterable: true
+            filter_code: free_hrs
           - name: overdue_hrs
             type: NUMBER
           - name: undated_hrs
             type: NUMBER
           - name: logged_hrs
             type: NUMBER
+            filterable: true
+            filter_code: logged_hrs
           - name: rate_type
             type: VARCHAR
           - name: currency_code
@@ -409,6 +433,10 @@ modules:
           is_working_day: is_working_day
           person_id: person_id
           full_name: full_name
+          pool_list: pool_list
+          free_hrs: free_hrs
+          capacity_hrs: capacity_hrs
+          planned_hrs: planned_hrs
 
     kpis:
       average_planned_utilization:

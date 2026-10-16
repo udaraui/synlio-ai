@@ -28,6 +28,15 @@ In `gold.mart_resource_workload_current`, `workload_status` has 4 exact values: 
 - **Available / Free capacity** ("who is free?", "available resources"): Filter by `{"workload_status": "Available"}` or `{"free_hrs": ">0"}`.
 - **Overloaded** ("who is overloaded?"): Filter by `{"workload_status": "%Overloaded%"}`.
 
-### 3. Column Selection & Force
+### 3. Future Capacity & Timeframe Availability (e.g. Next Week)
+For questions about next week, future weeks, or specific hours needed (e.g. "who can take 16 hours next week?", "who has capacity next week?", "who is free next week?"):
+- Table: Query **`gold.fct_resource_day`**.
+- Columns: `["full_name", "capacity_hrs", "planned_hrs", "free_hrs"]` (include `"pool_list"` if pool or team context is mentioned).
+- Filters:
+  - Timeframe: `company_week_start_date: "next_week"` (or `"this_week"`, `"last_week"`).
+  - Capacity required: If the user specifies an hour requirement like "16 hours", pass `free_hrs: ">=16"`. If asking generally who is available/has time, pass `free_hrs: ">0"`.
+  - The query engine automatically aggregates daily grain records into weekly totals per resource, sorts by available capacity, and eliminates duplicates.
+
+### 4. Column Selection & Force
 - **Names Only**: Always select human-readable names (`full_name`, `skill_name`, `resource_pool_name`). NEVER select surrogate IDs (`resource_id`, `company_id`).
 - **Force / Full List**: Pass `force=True` only when the user explicitly requests all records ("show all", "complete list", "full list"). Otherwise use `force=False`.
