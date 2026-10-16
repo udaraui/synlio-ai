@@ -1,6 +1,6 @@
-# Synlio AI Application
+# Synlio Co-Pilot Application
 
-This is a simple FastAPI application for the Synlio AI project.
+This is a simple FastAPI application for the Synlio Co-Pilot project.
 
 ## Local Development
 

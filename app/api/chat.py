@@ -32,7 +32,7 @@ async def chat(
 
     if not insight_agent:
         async def unavailable_stream():
-            yield "__FINAL__Synlio AI is temporarily unavailable. Please try again in a few moments."
+            yield "__FINAL__Synlio Co-Pilot is temporarily unavailable. Please try again in a few moments."
         return StreamingResponse(unavailable_stream(), media_type="text/event-stream")
         
     async def event_stream():
