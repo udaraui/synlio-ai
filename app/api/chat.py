@@ -14,6 +14,8 @@ async def chat(
     user_id: Optional[int] = Body(None),
     user_email: Optional[str] = Body(None),
     company_id: Optional[int] = Body(None),
+    agent: Optional[str] = Body(None),
+    context: Optional[dict] = Body(None),
     scope: Optional[dict] = Body(None),
 ):
     print("\n[INCOMING REQUEST CONTEXT]============================================")
@@ -22,6 +24,8 @@ async def chat(
     print(f"User ID:           {user_id}")
     print(f"User Email:        {user_email}")
     print(f"Company ID:        {company_id}")
+    print(f"Agent (Preset):    {agent}")
+    print(f"Page Context:      {context}")
     if scope:
         print(f"Ticket Space IDs:  {scope.get('allowed_ticket_space_ids', [])}")
         print(f"Task Space IDs:    {scope.get('allowed_task_space_ids', [])}")
@@ -43,6 +47,8 @@ async def chat(
                 user_id=user_id,
                 user_email=user_email,
                 company_id=company_id,
+                agent=agent,
+                context=context,
                 scope=scope,
             ):
                 yield chunk

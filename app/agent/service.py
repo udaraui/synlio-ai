@@ -61,15 +61,20 @@ class InsightAgent:
         user_id: Optional[int] = None,
         user_email: Optional[str] = None,
         company_id: Optional[int] = None,
+        agent: Optional[str] = None,
+        context: Optional[dict] = None,
         scope: Optional[dict] = None,
     ) -> AgentResult:
         config = {"configurable": {"thread_id": conversation_id or "default"}}
+        active_workers = [agent] if agent else None
         input_state = {
             "messages": [("user", query)],
             "user_id": user_id,
             "user_email": user_email,
             "company_id": company_id,
             "scope": scope,
+            "context": context,
+            "active_workers": active_workers,
             "error_message": None,
         }
         response = await self.agent_executor.ainvoke(input_state, config=config)
@@ -86,6 +91,8 @@ class InsightAgent:
         user_id: Optional[int] = None,
         user_email: Optional[str] = None,
         company_id: Optional[int] = None,
+        agent: Optional[str] = None,
+        context: Optional[dict] = None,
         scope: Optional[dict] = None,
     ):
         from app.agent.state import global_token_usage
@@ -93,25 +100,31 @@ class InsightAgent:
         global_token_usage.set([0, 0, 0])
         start_time = time.time()
         
+        domain_display_names = {
+            "resource_analytics": "resource workload",
+            "project_analytics": "projects",
+            "ticket_analytics": "tickets",
+        }
+        
         table_content = ""
-        yield "__REPLACE__Checking what you need..."
+        if agent and agent in domain_display_names:
+            yield f"__REPLACE__Gathering details on {domain_display_names[agent]}..."
+        else:
+            yield "__REPLACE__Checking what you need..."
         
         formatter_started = False
         config = {"configurable": {"thread_id": conversation_id or "default"}}
         
+        active_workers = [agent] if agent else None
         input_state = {
             "messages": [("user", query)],
             "user_id": user_id,
             "user_email": user_email,
             "company_id": company_id,
             "scope": scope,
+            "context": context,
+            "active_workers": active_workers,
             "error_message": None,
-        }
-        
-        domain_display_names = {
-            "resource_analytics": "resource workload",
-            "project_analytics": "projects",
-            "ticket_analytics": "tickets",
         }
 
         # stream_mode multiple yields (stream_mode, data) in newer langgraph

@@ -160,11 +160,23 @@ def create_graph(llm: ChatOpenAI, orchestrator_llm: ChatOpenAI = None, formatter
     builder.add_node("tool_executor", custom_tool_executor_node)
     builder.add_node("formatter", formatter)
     
-    builder.add_edge(START, "orchestrator")
-    
     # -------------------------------------------------------------------------
     # Routing Functions & Conditional Edges
     # -------------------------------------------------------------------------
+    def route_start(state: AgentState) -> str:
+        if state.get("active_workers"):
+            print(f"[ORCHESTRATOR BYPASS] Active workers preset: {state['active_workers']}. Direct dispatch to workers node!")
+            return "workers"
+        return "orchestrator"
+
+    builder.add_conditional_edges(
+        START,
+        route_start,
+        {
+            "workers": "workers",
+            "orchestrator": "orchestrator",
+        },
+    )
     def route_after_orchestrator(state: AgentState) -> str:
         active_workers = state.get("active_workers", [])
         return "workers" if active_workers else "formatter"

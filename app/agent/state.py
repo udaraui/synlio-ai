@@ -26,6 +26,7 @@ class AgentState(TypedDict, total=False):
     user_email: Optional[str]
     company_id: Optional[int]
     scope: Optional[UserScope]
+    context: Optional[dict]
 
 import contextvars
 global_token_usage = contextvars.ContextVar("global_token_usage", default=[0, 0, 0])
