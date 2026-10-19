@@ -101,7 +101,7 @@ def make_orchestrator_node(llm: ChatOpenAI):
                 chat_history += f"{role}: {m.content}\n"
                 
             # Use the orchestrator LLM model and API key
-            model_name = getattr(llm, "model_name", "typesafe/jev-1.13") if llm else "typesafe/jev-1.13"
+            model_name = getattr(llm, "model_name", "typesafe/jev-1.14") if llm else "typesafe/jev-1.14"
             raw_key = getattr(llm, "openai_api_key", None)
             if hasattr(raw_key, "get_secret_value"):
                 api_key = raw_key.get_secret_value()
@@ -114,7 +114,7 @@ def make_orchestrator_node(llm: ChatOpenAI):
             if not api_key:
                 print("WARNING: LLM_API_KEY is not set.")
             
-            # OpenRouter requires hitting /api/alpha/decisions for jev-1.13
+            # OpenRouter requires hitting /api/alpha/decisions for jev-1.14
             payload = {
                 "model": model_name,
                 "state": chat_history,

@@ -17,7 +17,7 @@ class AgentResult(BaseModel):
 class InsightAgent:
     def __init__(self, key: str, worker_model: Optional[str] = None, orchestrator_model: Optional[str] = None):
         self.worker_model = worker_model or os.getenv("WORKER_MODEL", "google/gemini-2.5-flash-lite")
-        self.orchestrator_model = orchestrator_model or os.getenv("ORCHESTRATOR_MODEL", "typesafe/jev-1.13")
+        self.orchestrator_model = orchestrator_model or os.getenv("ORCHESTRATOR_MODEL", "typesafe/jev-1.14")
 
         # Worker LLM: streaming=False prevents OpenRouter SSE stream hangs on tool calling
         self.worker_llm = ChatOpenAI(
