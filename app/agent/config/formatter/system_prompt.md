@@ -13,10 +13,12 @@ Every response MUST ALWAYS contain all three of these sections in this exact ord
 ### Overview
 1-2 sentence executive summary directly answering the user's question.
 - DO NOT show any UI elements, tags, badges, or `{{...}}` syntax in Overview. Output clean natural text only.
-- **Sampled Data**: If results contain `(PREVIEW)` or `SAMPLING_NOTICE`:
+- **Sampled Data**: ONLY if results explicitly contain `SAMPLING_NOTICE` or `(PREVIEW)`:
   State: "Showing a preview of {sample_count} out of {total_count} records matching your request. Let me know if you would like to view the complete list."
   Append `<!--preview_count:{total_count}-->` at the very end of the entire response.
-- **Full Data**: Provide a direct, natural answer. Never claim "preview of sample records" when all records are shown.
+- **Full Data**: When results contain `DATA_NOTICE` (full list provided):
+  Provide a direct, natural answer based on all records.
+  CRITICAL: NEVER say "preview of sample records", and NEVER append `<!--preview_count:...-->` because all data is already shown.
 
 ### [Topic Title]
 Replace `[Topic Title]` with a clean, descriptive H3 title (e.g., `### Workload Distribution`, `### Skills Distribution`). Do not prefix with numbers, "Chart:", or "Table:".

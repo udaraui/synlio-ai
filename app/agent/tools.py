@@ -58,7 +58,8 @@ def rows_to_toon(
         lines.append(
             f"\n[DATA_NOTICE: All {cnt} matching records are provided above (FULL LIST, NOT SAMPLED). "
             f"In your Overview section, write a natural, informative 1-2 sentence executive overview answering the user's query directly based on the data. "
-            f"Do NOT use robotic boilerplate phrases like 'Here is the complete list of all {cnt} records matching your request', and NEVER say 'preview of sample records'.]"
+            f"Do NOT use robotic boilerplate phrases like 'Here is the complete list of all {cnt} records matching your request', and NEVER say 'preview of sample records'. "
+            f"Do NOT append <!--preview_count:...--> because all matching data is already shown.]"
         )
     return "\n".join(lines)
 
