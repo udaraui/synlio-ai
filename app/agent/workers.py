@@ -22,11 +22,17 @@ from app.agent.prompts import (
 def print_usage(node_name: str, response, elapsed: float = 0.0, question: str = ""):
     total = 0
     try:
-        usage = getattr(response, "usage_metadata", None)
-        if not usage:
-            usage = getattr(response, "response_metadata", {}).get("token_usage", {})
+        usage = None
+        model_name = "unknown"
         
-        model_name = getattr(response, "response_metadata", {}).get("model_name", "unknown")
+        if isinstance(response, dict):
+            usage = response.get("usage", {})
+            model_name = response.get("model", "unknown")
+        else:
+            usage = getattr(response, "usage_metadata", None)
+            if not usage:
+                usage = getattr(response, "response_metadata", {}).get("token_usage", {})
+            model_name = getattr(response, "response_metadata", {}).get("model_name", "unknown")
         
         # LangChain streaming bug: merges string metadata across chunks, doubling the model name
         if isinstance(model_name, str):
@@ -37,7 +43,7 @@ def print_usage(node_name: str, response, elapsed: float = 0.0, question: str = 
         if usage:
             in_tokens = usage.get("input_tokens", usage.get("prompt_tokens", 0))
             out_tokens = usage.get("output_tokens", usage.get("completion_tokens", 0))
-            total = usage.get("total_tokens", 0)
+            total = usage.get("total_tokens", 0) or (in_tokens + out_tokens)
             time_str = f" | Time: {elapsed:.2f}s" if elapsed else ""
             print(f"Token Usage - In: {in_tokens} | Out: {out_tokens} | Total: {total}{time_str}")
             usage_list = global_token_usage.get()
@@ -94,6 +100,19 @@ def make_orchestrator_node(llm: ChatOpenAI):
                 print("Analyzing prompt and extracting semantic context with Jeff (via OpenRouter Decisions API)...")
             start_time = time.time()
             
+            # Extract user query for usage logging
+            user_query = ""
+            for m in reversed(messages):
+                if isinstance(m, HumanMessage) or getattr(m, "type", "") == "human":
+                    user_query = m.content
+                    break
+                elif isinstance(m, tuple) and len(m) == 2 and m[0] in ("user", "human"):
+                    user_query = m[1]
+                    break
+            if not user_query and messages:
+                last_m = messages[-1]
+                user_query = getattr(last_m, "content", str(last_m))
+
             # Reconstruct the conversation history
             chat_history = f"SYSTEM INSTRUCTIONS: {ORCHESTRATOR_SYSTEM_PROMPT}\n\n"
             for m in messages:
@@ -136,6 +155,7 @@ def make_orchestrator_node(llm: ChatOpenAI):
                 raise Exception(f"OpenRouter API Error: {resp.status_code} - {resp.text}")
                 
             result_data = resp.json()
+            result_data.setdefault("model", model_name)
             answers = result_data.get("answers", {})
             
             domain_answer = answers.get("domain", {})
@@ -167,6 +187,9 @@ def make_orchestrator_node(llm: ChatOpenAI):
             if requested_unavailable and not valid_active_workers:
                 unavailable_msg = "Project Analytics and Ticket Analytics are temporarily unavailable while system updates are underway. Only Resource Analytics is currently available."
                 print(f"[ORCHESTRATOR] Intercepted unavailable domain request: {requested_unavailable}. Returning notice.")
+                elapsed = time.time() - start_time
+                print_usage("ORCHESTRATOR", result_data, elapsed, question=user_query)
+                print()
                 return {
                     "active_workers": [],
                     "current_round": current_round,
@@ -180,7 +203,7 @@ def make_orchestrator_node(llm: ChatOpenAI):
 
             print(f"Active Workers: {domains}")
             elapsed = time.time() - start_time
-            print(f"Time: {elapsed:.2f}s")
+            print_usage("ORCHESTRATOR", result_data, elapsed, question=user_query)
             print()
             
             return {
