@@ -27,6 +27,12 @@ class AgentState(TypedDict, total=False):
     company_id: Optional[int]
     scope: Optional[UserScope]
     context: Optional[dict]
+    # Safety & Gate Keeper
+    is_injection: Optional[bool]
+    safety_status: Optional[str]
+    injection_score: Optional[float]
+    # Sentiment & Tone
+    frustration_level: Optional[str]
 
 import contextvars
 global_token_usage = contextvars.ContextVar("global_token_usage", default=[0, 0, 0])

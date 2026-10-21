@@ -1,19 +1,21 @@
 import os
 import json
 import time
-from typing import Literal
-from sqlalchemy import create_engine, text
+import httpx
+from typing import Optional, Dict, Any
+from sqlalchemy import text
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_core.runnables import RunnableConfig
-from pydantic import BaseModel, Field
 
 from app.agent.state import AgentState, global_token_usage
 from app.agent.tools import get_db_engine
 from app.agent.prompts import (
     ORCHESTRATOR_SYSTEM_PROMPT,
     ORCHESTRATOR_QUESTIONS,
-    FORMATTER_PROMPT,
+    GATE_KEEPER_QUESTIONS,
+    GATE_KEEPER_THRESHOLD,
+    GATE_KEEPER_REFUSAL_MESSAGE,
     get_formatter_prompt,
     get_worker_prompt,
     get_worker_user_context,
@@ -80,6 +82,143 @@ def print_usage(node_name: str, response, elapsed: float = 0.0, question: str = 
     except Exception as e:
         print(f"Error logging usage: {e}")
     return total
+
+def make_gate_keeper_node(llm: Optional[ChatOpenAI] = None):
+    """
+    Factory creating the GATE_KEEPER node.
+    Acts as the first perimeter defense line to evaluate prompt injection,
+    jailbreak attempts, and safety policy violations using the Jev model via OpenRouter Decisions API.
+    """
+    async def gate_keeper_node(state: AgentState, config: Optional[RunnableConfig] = None) -> Dict[str, Any]:
+        messages = state.get("messages", [])
+
+        # Extract latest user query
+        user_query = ""
+        for m in reversed(messages):
+            if isinstance(m, HumanMessage) or getattr(m, "type", "") == "human":
+                user_query = str(m.content)
+                break
+            elif isinstance(m, tuple) and len(m) == 2 and m[0] in ("user", "human"):
+                user_query = str(m[1])
+                break
+        if not user_query and messages:
+            last_m = messages[-1]
+            user_query = str(getattr(last_m, "content", last_m))
+
+        if not user_query.strip():
+            return {
+                "is_injection": False,
+                "safety_status": "SAFE",
+                "injection_score": 0.0,
+                "error_message": None,
+            }
+
+        start_time = time.time()
+        print("\n=======================================================", flush=True)
+        print("--- [PIPELINE START] Gate Keeper: Analyzing Prompt Safety with Jev Model ---", flush=True)
+        print(f"--- [DEBUG] User Question: '{user_query}' ---", flush=True)
+        print("=======================================================\n", flush=True)
+
+        # Build conversation history context
+        history_str = ""
+        for m in messages[:-1]:
+            role = "User" if getattr(m, "type", "") == "human" else "Assistant"
+            content = getattr(m, "content", str(m))
+            history_str += f"{role}: {content}\n"
+
+        state_description = ""
+        if history_str.strip():
+            state_description += f"Conversation History:\n{history_str.strip()}\n\n"
+        state_description += f"The user asked the following question: {user_query}"
+
+        model_name = os.getenv("GATE_KEEPER_MODEL") or os.getenv("GUARDRAIL_MODEL", "typesafe/jev-1.14")
+
+        raw_key = getattr(llm, "openai_api_key", None) if llm else None
+        if hasattr(raw_key, "get_secret_value"):
+            api_key = raw_key.get_secret_value()
+        else:
+            api_key = str(raw_key) if raw_key else None
+
+        if not api_key or api_key.startswith("***"):
+            api_key = os.getenv("JEV_API_KEY") or os.getenv("OPENROUTER_API_KEY") or os.getenv("LLM_API_KEY")
+
+        payload = {
+            "model": model_name,
+            "state": state_description,
+            "questions": GATE_KEEPER_QUESTIONS,
+        }
+
+        is_injection = False
+        safety_status = "SAFE"
+        score_float = 0.0
+        result_data = {}
+
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    "https://openrouter.ai/api/alpha/decisions",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                    timeout=15.0,
+                )
+            if resp.status_code != 200:
+                raise Exception(f"OpenRouter Decisions API returned status {resp.status_code}: {resp.text}")
+
+            result_data = resp.json()
+            result_data.setdefault("model", model_name)
+            answers = result_data.get("answers", {}) if isinstance(result_data, dict) else {}
+            injection_data = answers.get("is_injection", {})
+
+            # 'noul' primitive returns calibrated probability between 0.0 and 1.0
+            score = injection_data.get("noul")
+            if score is None:
+                score = injection_data.get("value", injection_data.get("probability", 0.0))
+            try:
+                score_float = float(score)
+            except (TypeError, ValueError):
+                score_float = 1.0 if score is True else 0.0
+
+            if score_float >= GATE_KEEPER_THRESHOLD:
+                is_injection = True
+                safety_status = "INJECTION"
+            else:
+                is_injection = False
+                safety_status = "SAFE"
+
+            elapsed = time.time() - start_time
+            print(f"[GATE_KEEPER] Jev score: {score_float:.3f} (Threshold: {GATE_KEEPER_THRESHOLD}) -> {safety_status}")
+            print_usage("GATE_KEEPER", result_data, elapsed, question=user_query)
+            print()
+
+        except Exception as e:
+            elapsed = time.time() - start_time
+            print(f"[GATE_KEEPER] Warning: Jev API error ({e}). Defaulting to SAFE to prevent user disruption.")
+            is_injection = False
+            safety_status = "SAFE"
+            score_float = 0.0
+
+        if is_injection:
+            print("[GATE_KEEPER] Action: Flagged malicious prompt. Terminating immediately at GATE_KEEPER with safe refusal.")
+            return {
+                "messages": [AIMessage(content=GATE_KEEPER_REFUSAL_MESSAGE)],
+                "is_injection": True,
+                "safety_status": "INJECTION",
+                "injection_score": score_float,
+                "error_message": GATE_KEEPER_REFUSAL_MESSAGE,
+                "active_workers": [],
+            }
+
+        return {
+            "is_injection": False,
+            "safety_status": "SAFE",
+            "injection_score": score_float,
+            "error_message": None,
+        }
+
+    return gate_keeper_node
 
 def make_orchestrator_node(llm: ChatOpenAI):
     async def orchestrator_node(state: AgentState, config: RunnableConfig):
@@ -191,6 +330,7 @@ def make_orchestrator_node(llm: ChatOpenAI):
                 print_usage("ORCHESTRATOR", result_data, elapsed, question=user_query)
                 print()
                 return {
+                    "messages": [AIMessage(content=unavailable_msg)],
                     "active_workers": [],
                     "current_round": current_round,
                     "retry_feedback": retry_feedback,
@@ -205,6 +345,33 @@ def make_orchestrator_node(llm: ChatOpenAI):
             elapsed = time.time() - start_time
             print_usage("ORCHESTRATOR", result_data, elapsed, question=user_query)
             print()
+
+            if not domains:
+                if frustration in ("high", "medium"):
+                    friendly_msg = (
+                        "I sincerely apologize for the frustration. I am here to help you get the answers you need. "
+                        "I can assist with analyzing project timelines, tasks, resource workloads, and tickets. "
+                        "Please let me know what specific data or issue you'd like to look into."
+                    )
+                elif frustration == "low":
+                    friendly_msg = (
+                        "I apologize for any confusion. I'm here to assist you with your project timelines, "
+                        "tasks, resource workloads, or tickets. How can I best help you?"
+                    )
+                else:
+                    friendly_msg = (
+                        "I am your Synlio AI Co-Pilot. I can help you analyze project timelines, "
+                        "tasks, resource workloads, and tickets. How can I help you?"
+                    )
+                return {
+                    "messages": [AIMessage(content=friendly_msg)],
+                    "active_workers": [],
+                    "current_round": current_round,
+                    "retry_feedback": retry_feedback,
+                    "needs_retry": False,
+                    "error_message": None,
+                    "frustration_level": frustration,
+                }
             
             return {
                 "active_workers": domains,
@@ -212,25 +379,31 @@ def make_orchestrator_node(llm: ChatOpenAI):
                 "retry_feedback": retry_feedback,
                 "needs_retry": False,
                 "error_message": None,
+                "frustration_level": frustration,
             }
         except Exception as e:
             error_str = str(e)
             print(f"Error parsing orchestration plan: {error_str}")
             
             if "401" in error_str or "expired" in error_str.lower() or "unauthorized" in error_str.lower():
+                auth_msg = "The AI service is currently unavailable. Please check the backend console for details."
                 return {
+                    "messages": [AIMessage(content=auth_msg)],
                     "active_workers": [],
                     "current_round": current_round,
                     "retry_feedback": retry_feedback,
                     "needs_retry": False,
-                    "error_message": "The AI service is currently unavailable. Please check the backend console for details."
+                    "error_message": auth_msg
                 }
             
+            fallback_msg = "I'm sorry, I couldn't understand your request or map it to a specific analytics domain. Could you please rephrase or specify if you'd like to inspect projects, tickets, or resources?"
             return {
+                "messages": [AIMessage(content=fallback_msg)],
                 "active_workers": [],
                 "current_round": current_round,
                 "retry_feedback": retry_feedback,
-                "needs_retry": False
+                "needs_retry": False,
+                "error_message": fallback_msg
             }
     return orchestrator_node
 
@@ -346,6 +519,10 @@ def make_worker_node(llm: ChatOpenAI, domain: str, tool_func):
                     print(f"Tool Called: {tc['name']}")
                     print(f"Arguments: {json.dumps(tc['args'], indent=2)}")
             else:
+                content = (response.content or "").strip()
+                if not content:
+                    friendly_text = f"I reviewed your request for {domain.replace('_', ' ')}, but did not find any specific data action to take. Please provide more details or ask a specific question."
+                    response = AIMessage(content=friendly_text)
                 print(f"Output: {response.content}")
                 
             print_usage(domain, response, elapsed, question=user_query)
@@ -367,7 +544,7 @@ def make_formatter_node(llm: ChatOpenAI):
         messages = state.get("messages", [])
         human_msgs = [m for m in messages if isinstance(m, HumanMessage)]
         user_query = human_msgs[-1].content if human_msgs else ""
-        active_workers = state.get("active_workers", [])
+        active_workers = state.get("active_workers") or []
         
         print("[FORMATTER]==========================================")
         print("Formatting final response...")
@@ -428,6 +605,12 @@ def make_formatter_node(llm: ChatOpenAI):
             domain_results_text += f"\n--- {dom.upper()} ---\n{toon_data}\n"
 
         content = get_formatter_prompt()
+        frustration_level = (state.get("frustration_level") or "none").lower()
+        if frustration_level in ("high", "medium"):
+            content += f"\n\nUSER TONE & SENTIMENT DIRECTIVE: The user's tone is {frustration_level.upper()}LY frustrated/dissatisfied. You MUST start the Overview section with a genuine, warm, and professional apology acknowledging their frustration before delivering the data summary."
+        elif frustration_level == "low":
+            content += f"\n\nUSER TONE & SENTIMENT DIRECTIVE: The user appears mildly confused or concerned. Open the Overview with a polite, empathetic acknowledgment."
+
         if conv_history.strip():
             content += f"\n\nRECENT CONVERSATION:\n{conv_history.strip()}"
         content += f"\n\nUSER QUERY: {user_query}\n\nDOMAIN RESULTS (TOON Format):\n{domain_results_text.strip() if domain_results_text.strip() else 'No records found.'}"

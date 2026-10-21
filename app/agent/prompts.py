@@ -1,6 +1,5 @@
 import os
 import yaml
-import json
 
 def load_file(path: str) -> str:
     if os.path.exists(path):
@@ -50,19 +49,36 @@ def get_orchestrator_config():
 
 ORCHESTRATOR_CONFIG = get_orchestrator_config()
 ORCHESTRATOR_QUESTIONS = ORCHESTRATOR_CONFIG.get("questions", {})
-ORCHESTRATOR_INSTRUCTIONS = ORCHESTRATOR_CONFIG.get("instructions", "")
+
+def get_gate_keeper_config():
+    try:
+        config_path = os.path.join(os.path.dirname(__file__), "config", "gate_keeper", "system_prompt.yaml")
+        if not os.path.exists(config_path):
+            config_path = "app/agent/config/gate_keeper/system_prompt.yaml"
+        with open(config_path, 'r', encoding='utf-8') as f:
+            return yaml.safe_load(f) or {}
+    except Exception as e:
+        print(f"Error loading gate_keeper config: {e}")
+        return {}
+
+GATE_KEEPER_CONFIG = get_gate_keeper_config()
+GATE_KEEPER_QUESTIONS = GATE_KEEPER_CONFIG.get("questions", {})
+GATE_KEEPER_THRESHOLD = GATE_KEEPER_CONFIG.get("threshold", 0.75)
+GATE_KEEPER_REFUSAL_MESSAGE = GATE_KEEPER_CONFIG.get(
+    "refusal_message",
+    "I cannot process this request as it was flagged for potential prompt manipulation or safety policy violations. If you believe this is an error, please rephrase your question."
+)
+
+def get_gate_keeper_system_prompt() -> str:
+    return load_file("app/agent/config/gate_keeper/system_prompt.md").strip()
 
 ORCHESTRATOR_SYSTEM_PROMPT = f"""
-{ORCHESTRATOR_INSTRUCTIONS}
-
 SEMANTIC LAYER MODULES (METADATA ONLY):
 {build_orchestrator_context()}
 """.strip()
 
 def get_formatter_prompt() -> str:
     return load_file("app/agent/config/formatter/system_prompt.md").strip()
-
-FORMATTER_PROMPT = get_formatter_prompt()
 
 def get_worker_prompt(domain_name: str) -> str:
     domain_dir = f"app/agent/config/{domain_name}"

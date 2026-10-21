@@ -133,20 +133,45 @@ class InsightAgent:
                 mode, payload = item
                 if mode == "updates" and isinstance(payload, dict):
                     for node_name, node_output in payload.items():
-                        if node_name == "orchestrator":
-                            active_workers = node_output.get("active_workers", [])
+                        if node_name == "GATE_KEEPER":
+                            if node_output.get("is_injection"):
+                                msgs = node_output.get("messages", [])
+                                if msgs and not formatter_started:
+                                    text = getattr(msgs[-1], "content", str(msgs[-1]))
+                                    yield f"__FINAL__{text}"
+                                    formatter_started = True
+                        elif node_name == "orchestrator":
+                            active_workers = node_output.get("active_workers") or []
                             if active_workers:
                                 domain_labels = [domain_display_names.get(d, d.replace('_analytics', '')) for d in active_workers]
                                 yield f"__REPLACE__Gathering details on {', '.join(domain_labels)}..."
                             else:
-                                yield "__REPLACE__Gathering details..."
-                        elif node_name == "workers":
-                            yield "__REPLACE__Connecting the data points..."
+                                msgs = node_output.get("messages", [])
+                                if msgs and not formatter_started:
+                                    text = getattr(msgs[-1], "content", str(msgs[-1]))
+                                    yield f"__FINAL__{text}"
+                                    formatter_started = True
+                        elif node_name in ["project_analytics", "ticket_analytics", "resource_analytics", "workers"]:
+                            msgs = node_output.get("messages", [])
+                            has_tool_calls = any(getattr(m, "tool_calls", None) for m in msgs)
+                            if has_tool_calls:
+                                yield "__REPLACE__Connecting the data points..."
+                            else:
+                                if msgs and not formatter_started:
+                                    text = getattr(msgs[-1], "content", str(msgs[-1]))
+                                    yield f"__FINAL__{text}"
+                                    formatter_started = True
                         elif node_name == "tool_executor":
                             if node_output.get("needs_retry"):
                                 yield "__REPLACE__Double-checking the details..."
                             else:
                                 yield "__REPLACE__Almost ready, Writing up your insights..."
+                        elif node_name == "formatter":
+                            msgs = node_output.get("messages", [])
+                            if msgs and not formatter_started:
+                                text = getattr(msgs[-1], "content", str(msgs[-1]))
+                                yield f"__FINAL__{text}"
+                                formatter_started = True
                 elif mode == "messages":
                     chunk, metadata = payload
                     if getattr(chunk, "type", "") == "tool" and chunk.content:

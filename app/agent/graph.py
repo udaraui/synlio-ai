@@ -7,7 +7,12 @@ from langchain_core.messages import ToolMessage
 
 from app.agent.state import AgentState
 from app.agent.tools import query_project_data, query_ticket_data, query_resource_data
-from app.agent.workers import make_orchestrator_node, make_worker_node, make_formatter_node
+from app.agent.workers import (
+    make_gate_keeper_node,
+    make_orchestrator_node,
+    make_worker_node,
+    make_formatter_node,
+)
 
 def create_graph(llm: ChatOpenAI, orchestrator_llm: ChatOpenAI = None, formatter_llm: ChatOpenAI = None):
     if orchestrator_llm is None:
@@ -25,24 +30,8 @@ def create_graph(llm: ChatOpenAI, orchestrator_llm: ChatOpenAI = None, formatter
     workers_map = {
         "project_analytics": project_worker,
         "ticket_analytics": ticket_worker,
-        "resource_analytics": resource_worker
+        "resource_analytics": resource_worker,
     }
-    
-    async def parallel_workers_node(state: AgentState, config):
-        active_workers = state.get("active_workers", [])
-        if not active_workers:
-            return {"messages": []}
-            
-        tasks = [workers_map[domain](state, config) for domain in active_workers if domain in workers_map]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        all_messages = []
-        for res in results:
-            if isinstance(res, Exception):
-                print(f"[WORKER CRASH] Exception in worker: {res}")
-            elif isinstance(res, dict) and "messages" in res:
-                all_messages.extend(res["messages"])
-        return {"messages": all_messages}
         
     tools_by_name = {
         "query_project_data": query_project_data,
@@ -52,7 +41,7 @@ def create_graph(llm: ChatOpenAI, orchestrator_llm: ChatOpenAI = None, formatter
 
     async def custom_tool_executor_node(state: AgentState):
         messages = state.get("messages", [])
-        active_workers = state.get("active_workers", [])
+        active_workers = state.get("active_workers") or []
         
         recent_count = len(active_workers) if active_workers else 1
         recent_messages = messages[-recent_count:]
@@ -150,66 +139,84 @@ def create_graph(llm: ChatOpenAI, orchestrator_llm: ChatOpenAI = None, formatter
             }
 
     formatter = make_formatter_node(formatter_llm)
+    gate_keeper = make_gate_keeper_node(orchestrator_llm)
     
     # -------------------------------------------------------------------------
-    # Graph Construction (4 Nodes)
+    # Graph Construction (7 Distinct Nodes)
     # -------------------------------------------------------------------------
     builder = StateGraph(AgentState)
+    builder.add_node("GATE_KEEPER", gate_keeper)
     builder.add_node("orchestrator", orchestrator)
-    builder.add_node("workers", parallel_workers_node)
+    builder.add_node("project_analytics", project_worker)
+    builder.add_node("ticket_analytics", ticket_worker)
+    builder.add_node("resource_analytics", resource_worker)
     builder.add_node("tool_executor", custom_tool_executor_node)
     builder.add_node("formatter", formatter)
     
     # -------------------------------------------------------------------------
     # Routing Functions & Conditional Edges
     # -------------------------------------------------------------------------
-    def route_start(state: AgentState) -> str:
-        if state.get("active_workers"):
-            print(f"[ORCHESTRATOR BYPASS] Active workers preset: {state['active_workers']}. Direct dispatch to workers node!")
-            return "workers"
+    # START always passes through GATE_KEEPER first for prompt safety evaluation
+    builder.add_edge(START, "GATE_KEEPER")
+
+    def route_after_gate_keeper(state: AgentState):
+        if state.get("is_injection"):
+            print("[GATE_KEEPER ROUTING] Malicious prompt flagged. Terminating graph directly at END.")
+            return END
+        raw_workers = state.get("active_workers") or []
+        active_workers = [w for w in raw_workers if w in workers_map]
+        if active_workers:
+            print(f"[ORCHESTRATOR BYPASS] Active workers preset: {active_workers}. Direct dispatch to domain workers!")
+            return active_workers if len(active_workers) > 1 else active_workers[0]
         return "orchestrator"
 
     builder.add_conditional_edges(
-        START,
-        route_start,
+        "GATE_KEEPER",
+        route_after_gate_keeper,
         {
-            "workers": "workers",
+            END: END,
             "orchestrator": "orchestrator",
+            "project_analytics": "project_analytics",
+            "ticket_analytics": "ticket_analytics",
+            "resource_analytics": "resource_analytics",
         },
     )
-    def route_after_orchestrator(state: AgentState) -> str:
-        active_workers = state.get("active_workers", [])
-        return "workers" if active_workers else "formatter"
+
+    def route_after_orchestrator(state: AgentState):
+        raw_workers = state.get("active_workers") or []
+        active_workers = [w for w in raw_workers if w in workers_map]
+        if not active_workers:
+            return END
+        return active_workers if len(active_workers) > 1 else active_workers[0]
 
     builder.add_conditional_edges(
         "orchestrator",
         route_after_orchestrator,
         {
-            "workers": "workers",
-            "formatter": "formatter",
+            END: END,
+            "project_analytics": "project_analytics",
+            "ticket_analytics": "ticket_analytics",
+            "resource_analytics": "resource_analytics",
         },
     )
 
-    def route_after_workers(state: AgentState) -> str:
-        active_workers = state.get("active_workers", [])
+    def route_after_domain_worker(state: AgentState) -> str:
         messages = state.get("messages", [])
-        recent_count = len(active_workers) if active_workers else 1
-        recent_messages = messages[-recent_count:]
-
-        # Check if ANY worker generated tool calls
-        for msg in recent_messages:
-            if getattr(msg, "tool_calls", None):
+        if messages:
+            last_msg = messages[-1]
+            if getattr(last_msg, "tool_calls", None):
                 return "tool_executor"
-        return "formatter"
+        return END
 
-    builder.add_conditional_edges(
-        "workers",
-        route_after_workers,
-        {
-            "tool_executor": "tool_executor",
-            "formatter": "formatter",
-        },
-    )
+    for domain in ["project_analytics", "ticket_analytics", "resource_analytics"]:
+        builder.add_conditional_edges(
+            domain,
+            route_after_domain_worker,
+            {
+                "tool_executor": "tool_executor",
+                END: END,
+            },
+        )
 
     def route_after_tool_executor(state: AgentState) -> str:
         if state.get("needs_retry"):
