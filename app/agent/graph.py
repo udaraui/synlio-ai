@@ -1,11 +1,11 @@
 import os
 import time
 import asyncio
-from typing import cast
+from typing import Optional, Dict, Any, List
 from langgraph.graph import StateGraph, START, END
+from langgraph.checkpoint.memory import MemorySaver
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import ToolMessage
-
+from langchain_core.messages import ToolMessage, HumanMessage
 from app.agent.state import AgentState
 from app.agent.telemetry import record_node_telemetry
 from app.agent.tools import query_project_data, query_ticket_data, query_resource_data
@@ -16,58 +16,87 @@ from app.agent.workers import (
     make_formatter_node,
 )
 
-def create_graph(llm: ChatOpenAI, orchestrator_llm: ChatOpenAI = None, formatter_llm: ChatOpenAI = None):
-    if orchestrator_llm is None:
-        orchestrator_llm = llm
-    if formatter_llm is None:
-        formatter_llm = llm
-        
-    orchestrator = make_orchestrator_node(orchestrator_llm)
-    
-    # Domain Workers
-    project_worker = make_worker_node(llm, "project_analytics", query_project_data)
-    ticket_worker = make_worker_node(llm, "ticket_analytics", query_ticket_data)
-    resource_worker = make_worker_node(llm, "resource_analytics", query_resource_data)
-    
-    workers_map = {
-        "project_analytics": project_worker,
-        "ticket_analytics": ticket_worker,
-        "resource_analytics": resource_worker,
-    }
-        
-    tools_by_name = {
-        "query_project_data": query_project_data,
-        "query_ticket_data": query_ticket_data,
-        "query_resource_data": query_resource_data,
-    }
+# =============================================================================
+# 1. CONSTANTS & CONFIGURATION
+# =============================================================================
 
+QUERY_ROUND_COUNT_RAW = os.getenv("QUERY_ROUND_COUNT")
+if not QUERY_ROUND_COUNT_RAW:
+    print("[ENV ERROR] QUERY_ROUND_COUNT is not set in environment (.env)!")
+MAX_QUERY_ROUNDS = int(QUERY_ROUND_COUNT_RAW) if QUERY_ROUND_COUNT_RAW else 1
+
+FORCE_KEYWORDS = (
+    "force", "full list", "complete list", "all records",
+    "bring all data", "show all", "view all", "see all",
+    "all data", "all tasks", "all tickets"
+)
+
+EMPTY_RESULT_SIGNALS = (
+    "zero rows",
+    "records[0]: []",
+    "[0]: []",
+    "error",
+    "issue while trying",
+)
+
+VALID_DOMAINS = {"project_analytics", "ticket_analytics", "resource_analytics"}
+
+# =============================================================================
+# 2. PURE HELPER FUNCTIONS
+# =============================================================================
+
+def _detect_force_intent(messages: List[Any]) -> bool:
+    """Detects if the user requested the full/unfiltered dataset in their latest prompt."""
+    human_msgs = [m for m in messages if isinstance(m, HumanMessage) or getattr(m, "type", "") == "human"]
+    if not human_msgs or not human_msgs[-1].content:
+        return False
+    latest_query = str(human_msgs[-1].content).lower()
+    return any(k in latest_query for k in FORCE_KEYWORDS)
+
+def _has_valid_query_results(tool_messages: List[ToolMessage]) -> bool:
+    """Evaluates whether tool results contained valid data or if they were empty/errors."""
+    if not tool_messages:
+        return False
+    for m in tool_messages:
+        content = (getattr(m, "content", "") or "").strip().lower()
+        if not content:
+            continue
+        if any(signal in content for signal in EMPTY_RESULT_SIGNALS) or ("tool" in content and "not found" in content):
+            continue
+        return True
+    return False
+
+# =============================================================================
+# 3. TOOL EXECUTOR NODE FACTORY
+# =============================================================================
+
+def make_tool_executor_node(tools_by_name: Dict[str, Any]):
+    """
+    Creates the tool executor node that gathers tool calls from domain workers,
+    injects authenticated company/scope/context, runs tools concurrently via asyncio,
+    and manages the retry loop with telemetry tracking.
+    """
     async def custom_tool_executor_node(state: AgentState):
         start_time = time.time()
         messages = state.get("messages", [])
         active_workers = state.get("active_workers") or []
-        
+
         recent_count = len(active_workers) if active_workers else 1
         recent_messages = messages[-recent_count:]
-        
-        # Check if the user requested the full list (or used force) in their latest message
-        human_msgs = [m for m in messages if getattr(m, "type", "") == "human"]
-        latest_user_query = str(human_msgs[-1].content).lower() if human_msgs and human_msgs[-1].content else ""
-        full_list_keywords = ["force", "full list", "complete list", "all records", "bring all data", "show all", "view all", "see all", "all data", "all tasks", "all tickets"]
-        user_wants_force = any(k in latest_user_query for k in full_list_keywords)
-        
+        user_wants_force = _detect_force_intent(messages)
+
         all_tool_calls = []
         for msg in recent_messages:
             if getattr(msg, "tool_calls", None):
                 for tc in msg.tool_calls:
                     all_tool_calls.append(tc)
-                    
+
         async def run_tool(tc):
             tool_name = tc.get("name")
             args = dict(tc.get("args", {}))
             tool_call_id = tc.get("id")
             tool_func = tools_by_name.get(tool_name)
-            
-            # If user explicitly specified force in their prompt, ensure force=True is passed
+
             if user_wants_force:
                 args["force"] = True
 
@@ -76,7 +105,9 @@ def create_graph(llm: ChatOpenAI, orchestrator_llm: ChatOpenAI = None, formatter
                 args["company_id"] = state.get("company_id")
             if state.get("scope") is not None:
                 args["scope"] = state.get("scope")
-            
+            if state.get("context") is not None:
+                args["context"] = state.get("context")
+
             if tool_func:
                 try:
                     result = await tool_func.ainvoke(args)
@@ -87,7 +118,7 @@ def create_graph(llm: ChatOpenAI, orchestrator_llm: ChatOpenAI = None, formatter
                         result = f"Error executing {tool_name}: {inner_e}"
             else:
                 result = f"Tool {tool_name} not found."
-                
+
             return ToolMessage(
                 content=str(result),
                 name=tool_name,
@@ -95,28 +126,6 @@ def create_graph(llm: ChatOpenAI, orchestrator_llm: ChatOpenAI = None, formatter
             )
 
         tool_messages = await asyncio.gather(*[run_tool(tc) for tc in all_tool_calls])
-
-        def _has_valid_query_results(msgs):
-            if not msgs:
-                return False
-            for m in msgs:
-                c = (getattr(m, "content", "") or "").strip().lower()
-                if not c:
-                    continue
-                if not (
-                    "zero rows" in c
-                    or "records[0]: []" in c
-                    or "[0]: []" in c
-                    or "error" in c
-                    or "issue while trying" in c
-                    or ("tool" in c and "not found" in c)
-                ):
-                    return True
-            return False
-        query_round_count_raw = os.getenv("QUERY_ROUND_COUNT")
-        if not query_round_count_raw:
-            print("[ENV ERROR] QUERY_ROUND_COUNT is not set in environment (.env)!")
-        max_rounds = int(query_round_count_raw) if query_round_count_raw else 1
         current_round = state.get("current_round", 1) or 1
         has_valid = _has_valid_query_results(tool_messages)
         tool_elapsed = time.time() - start_time
@@ -135,20 +144,18 @@ def create_graph(llm: ChatOpenAI, orchestrator_llm: ChatOpenAI = None, formatter
             output_data={
                 "toolsExecuted": executed_names,
                 "rowsReturned": len(tool_messages),
-                "needsRetry": not has_valid and current_round < max_rounds,
+                "needsRetry": not has_valid and current_round < MAX_QUERY_ROUNDS,
                 "dataSummary": f"Retrieved results across {len(tool_messages)} tool executions." if has_valid else "Query returned no results.",
             },
             extra_summary=f"Executed: {executed_names} ({len(tool_messages)} results)",
         )
 
-        if not has_valid and current_round < max_rounds:
-            failure_reasons = []
-            for tm in tool_messages:
-                failure_reasons.append(f"{tm.name}: {tm.content}")
+        if not has_valid and current_round < MAX_QUERY_ROUNDS:
+            failure_reasons = [f"{tm.name}: {tm.content}" for tm in tool_messages]
             feedback = "; ".join(failure_reasons) if failure_reasons else "Query returned no results."
 
             print(f"[RETRY] Query returned no results or failed: {feedback}")
-            print(f"[RETRY] Running another round from the top (Round {current_round + 1} of {max_rounds})...\n")
+            print(f"[RETRY] Running another round from the top (Round {current_round + 1} of {MAX_QUERY_ROUNDS})...\n")
 
             return {
                 "messages": list(tool_messages),
@@ -157,44 +164,101 @@ def create_graph(llm: ChatOpenAI, orchestrator_llm: ChatOpenAI = None, formatter
                 "needs_retry": True
             }
         else:
-            if not has_valid and current_round >= max_rounds:
-                print(f"[RETRY] Reached maximum query rounds ({max_rounds}). Forwarding to Formatter.\n")
+            if not has_valid and current_round >= MAX_QUERY_ROUNDS:
+                print(f"[RETRY] Reached maximum query rounds ({MAX_QUERY_ROUNDS}). Forwarding to Formatter.\n")
             return {
                 "messages": list(tool_messages),
                 "needs_retry": False
             }
 
-    formatter = make_formatter_node(formatter_llm)
+    return custom_tool_executor_node
+
+# =============================================================================
+# 4. ROUTING FUNCTIONS
+# =============================================================================
+
+def route_after_gate_keeper(state: AgentState):
+    """
+    Evaluates gate_keeper output:
+    - If prompt injection flagged -> abort to END.
+    - If active workers already preset -> bypass orchestrator directly to domain worker(s).
+    - Otherwise -> proceed to orchestrator.
+    """
+    if state.get("is_injection"):
+        print("[gate_keeper ROUTING] Malicious prompt flagged. Terminating graph directly at END.")
+        return END
+    raw_workers = state.get("active_workers") or []
+    active_workers = [w for w in raw_workers if w in VALID_DOMAINS]
+    if active_workers:
+        print(f"\n[ORCHESTRATOR BYPASS] Active workers preset: {active_workers}. Direct dispatch to domain workers!")
+        return active_workers if len(active_workers) > 1 else active_workers[0]
+    return "orchestrator"
+
+def route_after_orchestrator(state: AgentState):
+    """Routes to active domain workers chosen by the orchestrator, or END if unclassified."""
+    raw_workers = state.get("active_workers") or []
+    active_workers = [w for w in raw_workers if w in VALID_DOMAINS]
+    if not active_workers:
+        return END
+    return active_workers if len(active_workers) > 1 else active_workers[0]
+
+def route_after_domain_worker(state: AgentState) -> str:
+    """Routes domain worker output to tool_executor if tool calls exist, else terminates."""
+    messages = state.get("messages", [])
+    if messages:
+        last_msg = messages[-1]
+        if getattr(last_msg, "tool_calls", None):
+            return "tool_executor"
+    return END
+
+def route_after_tool_executor(state: AgentState) -> str:
+    """Routes to orchestrator if retry is needed, else proceeds to the formatter."""
+    if state.get("needs_retry"):
+        return "orchestrator"
+    return "formatter"
+
+# =============================================================================
+# 5. GRAPH BUILDER & COMPILER
+# =============================================================================
+
+def create_graph(
+    llm: ChatOpenAI, 
+    orchestrator_llm: Optional[ChatOpenAI] = None, 
+    formatter_llm: Optional[ChatOpenAI] = None
+):
+    """Compiles the 7-node LangGraph state graph with routing and memory checkpointing."""
+    if orchestrator_llm is None:
+        orchestrator_llm = llm
+    if formatter_llm is None:
+        formatter_llm = llm
+
+    tools_by_name = {
+        "query_project_data": query_project_data,
+        "query_ticket_data": query_ticket_data,
+        "query_resource_data": query_resource_data,
+    }
+
+    # Initialize Nodes
     gate_keeper = make_gate_keeper_node(orchestrator_llm)
-    
-    # -------------------------------------------------------------------------
-    # Graph Construction (7 Distinct Nodes)
-    # -------------------------------------------------------------------------
+    orchestrator = make_orchestrator_node(orchestrator_llm)
+    project_worker = make_worker_node(llm, "project_analytics", query_project_data)
+    ticket_worker = make_worker_node(llm, "ticket_analytics", query_ticket_data)
+    resource_worker = make_worker_node(llm, "resource_analytics", query_resource_data)
+    tool_executor = make_tool_executor_node(tools_by_name)
+    formatter = make_formatter_node(formatter_llm)
+
+    # Build Graph Nodes
     builder = StateGraph(AgentState)
     builder.add_node("gate_keeper", gate_keeper)
     builder.add_node("orchestrator", orchestrator)
     builder.add_node("project_analytics", project_worker)
     builder.add_node("ticket_analytics", ticket_worker)
     builder.add_node("resource_analytics", resource_worker)
-    builder.add_node("tool_executor", custom_tool_executor_node)
+    builder.add_node("tool_executor", tool_executor)
     builder.add_node("formatter", formatter)
-    
-    # -------------------------------------------------------------------------
-    # Routing Functions & Conditional Edges
-    # -------------------------------------------------------------------------
-    # START always passes through gate_keeper first for prompt safety evaluation
-    builder.add_edge(START, "gate_keeper")
 
-    def route_after_gate_keeper(state: AgentState):
-        if state.get("is_injection"):
-            print("[gate_keeper ROUTING] Malicious prompt flagged. Terminating graph directly at END.")
-            return END
-        raw_workers = state.get("active_workers") or []
-        active_workers = [w for w in raw_workers if w in workers_map]
-        if active_workers:
-            print(f"\n[ORCHESTRATOR BYPASS] Active workers preset: {active_workers}. Direct dispatch to domain workers!")
-            return active_workers if len(active_workers) > 1 else active_workers[0]
-        return "orchestrator"
+    # Edges & Conditional Routing
+    builder.add_edge(START, "gate_keeper")
 
     builder.add_conditional_edges(
         "gate_keeper",
@@ -208,13 +272,6 @@ def create_graph(llm: ChatOpenAI, orchestrator_llm: ChatOpenAI = None, formatter
         },
     )
 
-    def route_after_orchestrator(state: AgentState):
-        raw_workers = state.get("active_workers") or []
-        active_workers = [w for w in raw_workers if w in workers_map]
-        if not active_workers:
-            return END
-        return active_workers if len(active_workers) > 1 else active_workers[0]
-
     builder.add_conditional_edges(
         "orchestrator",
         route_after_orchestrator,
@@ -226,15 +283,7 @@ def create_graph(llm: ChatOpenAI, orchestrator_llm: ChatOpenAI = None, formatter
         },
     )
 
-    def route_after_domain_worker(state: AgentState) -> str:
-        messages = state.get("messages", [])
-        if messages:
-            last_msg = messages[-1]
-            if getattr(last_msg, "tool_calls", None):
-                return "tool_executor"
-        return END
-
-    for domain in ["project_analytics", "ticket_analytics", "resource_analytics"]:
+    for domain in VALID_DOMAINS:
         builder.add_conditional_edges(
             domain,
             route_after_domain_worker,
@@ -244,11 +293,6 @@ def create_graph(llm: ChatOpenAI, orchestrator_llm: ChatOpenAI = None, formatter
             },
         )
 
-    def route_after_tool_executor(state: AgentState) -> str:
-        if state.get("needs_retry"):
-            return "orchestrator"
-        return "formatter"
-
     builder.add_conditional_edges(
         "tool_executor",
         route_after_tool_executor,
@@ -257,8 +301,7 @@ def create_graph(llm: ChatOpenAI, orchestrator_llm: ChatOpenAI = None, formatter
             "formatter": "formatter",
         },
     )
+
     builder.add_edge("formatter", END)
 
-    from langgraph.checkpoint.memory import MemorySaver
-    checkpointer = MemorySaver()
-    return builder.compile(checkpointer=checkpointer)
+    return builder.compile(checkpointer=MemorySaver())

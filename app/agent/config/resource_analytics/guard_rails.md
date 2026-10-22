@@ -10,3 +10,6 @@
 7. **Metadata Columns Rules**:
    - When querying for status, severity, ticket type, or hierarchy levels, you MUST ALWAYS SELECT both the `_name` AND `_color` columns (e.g. `status_name` AND `status_color`) whenever `_color` exists in the schema for that table. This is MANDATORY so the frontend displays the exact database colors in charts and tables. Select `_icon` if available as well.
    - NEVER return `_base` columns (like `status_base`) in the final output; ONLY use `_base` columns for WHERE clause filtering.
+8. **Scoped Context Enforcement**:
+   - When `CURRENT PAGE CONTEXT` specifies a Resource Group / Pool, you MUST include `pool_list: "%<Pool Name>%"` (or `resource_pool_name: "%<Pool Name>%"` if querying `gold.bridge_resource_pool`) in your tool `filters` dictionary.
+   - Do NOT omit this filter unless the user explicitly requests company-wide data (e.g. "across all teams", "all resource groups", "company-wide").

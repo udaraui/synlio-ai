@@ -1,19 +1,22 @@
 import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.responses import PlainTextResponse
 from app.api.chat import router as chat_router
 from app.agent.service import insight_agent
 
-# Disable Uvicorn's raw HTTP access log ("POST /chat HTTP/1.1 200 OK") to keep console clean
-logging.getLogger("uvicorn.access").disabled = True
-logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
-
-app = FastAPI(title="Synlio Co-Pilot API")
-
-@app.on_event("startup")
-async def startup_event():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Suppress verbose uvicorn access logs for clean SSE streaming output in the terminal
     logging.getLogger("uvicorn.access").disabled = True
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+    yield
+
+app = FastAPI(
+    title="Synlio Co-Pilot API",
+    version="1.0.0",
+    lifespan=lifespan,
+)
 
 app.include_router(chat_router)
 
@@ -23,4 +26,7 @@ def read_root():
 
 @app.get("/health")
 def health_check():
-    return {"status": "ok", "agent_loaded": insight_agent is not None}
+    return {
+        "status": "ok",
+        "agent_loaded": insight_agent is not None,
+    }

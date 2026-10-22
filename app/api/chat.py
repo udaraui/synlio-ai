@@ -20,6 +20,7 @@ async def chat(
     agent: Optional[str] = Body(None),
     context: Optional[dict] = Body(None),
     scope: Optional[dict] = Body(None),
+    history: Optional[list] = Body(None),
 ):
     print(f"\n{'='*80}")
     print("[INCOMING CHAT]")
@@ -30,13 +31,16 @@ async def chat(
         print(f"  Conversation:    {conversation_id}")
     if agent:
         print(f"  Preset Agent:    {agent}")
+    if context:
+        print(f"  Context:         {context}")
+    if history:
+        print(f"  Client History:  {len(history)} messages")
     if scope:
         ticket_spaces = scope.get('allowed_ticket_space_ids', [])
         task_spaces = scope.get('allowed_task_space_ids', [])
         print(f"  Permission Scope:")
         print(f"    Ticket Spaces: {ticket_spaces}")
         print(f"    Task Spaces:   {task_spaces}")
-    # print(f"{'='*80}")
 
     if not insight_agent:
         async def unavailable_stream():
@@ -57,6 +61,7 @@ async def chat(
                 agent=agent,
                 context=context,
                 scope=scope,
+                history=history,
             ):
                 yield chunk
         except Exception as e:

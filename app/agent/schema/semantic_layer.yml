@@ -27,6 +27,21 @@ modules:
           IMPORTANT: This table is ALREADY pre-filtered to the CURRENT ACTIVE WEEK (the week
           containing today). Do NOT add filters for week_start_date or week_end_date when
           the user asks for 'this week' or 'current workload'.
+        joins:
+          - table: gold.dim_resource
+            alias: r
+            join_on: "r.resource_id = b.resource_id"
+            dimensions:
+              - reporting_resource_name
+              - reporting_resource_id
+              - pool_list
+              - resource_pool_name
+              - resource_type
+              - email
+              - daily_working_hours
+              - hourly_cost
+              - daily_cost
+              - skill_list
         columns:
           # ── Identifiers & Tenant ──
           - name: resource_id
@@ -245,6 +260,21 @@ modules:
           Bridge table linking resources to skills, skill categories, levels, and star ratings.
           Use this table to answer questions about which resources have specific skills or expertise.
           Automatically joins gold.dim_resource on resource_id to retrieve full_name.
+        joins:
+          - table: gold.dim_resource
+            alias: r
+            join_on: "r.resource_id = b.resource_id"
+            dimensions:
+              - reporting_resource_name
+              - reporting_resource_id
+              - pool_list
+              - resource_pool_name
+              - resource_type
+              - email
+              - daily_working_hours
+              - hourly_cost
+              - daily_cost
+              - skill_list
         columns:
           - name: resource_id
             type: INTEGER
@@ -296,6 +326,21 @@ modules:
           Bridge table linking resources to resource pools, divisions, and pool owners.
           Use this table to answer questions about resource pool memberships and assignments.
           Automatically joins gold.dim_resource on resource_id to retrieve full_name.
+        joins:
+          - table: gold.dim_resource
+            alias: r
+            join_on: "r.resource_id = b.resource_id"
+            dimensions:
+              - reporting_resource_name
+              - reporting_resource_id
+              - pool_list
+              - resource_pool_name
+              - resource_type
+              - email
+              - daily_working_hours
+              - hourly_cost
+              - daily_cost
+              - skill_list
         columns:
           - name: resource_id
             type: INTEGER
@@ -349,6 +394,31 @@ modules:
           (e.g. 'Who can take 16 hours next week?', 'Available capacity next week', 'Who has time next week').
           Automatically joins gold.dim_resource on resource_id to retrieve full_name and pool_list.
           Free hours is calculated as free_hrs (capacity_hrs - planned_hrs).
+        joins:
+          - table: gold.dim_resource
+            alias: r
+            join_on: "r.resource_id = b.resource_id"
+            dimensions:
+              - reporting_resource_name
+              - reporting_resource_id
+              - pool_list
+              - resource_pool_name
+              - resource_type
+              - email
+              - daily_working_hours
+              - hourly_cost
+              - daily_cost
+              - skill_list
+        measures:
+          capacity_hrs: "SUM(b.capacity_hrs) AS capacity_hrs"
+          planned_hrs: "SUM(b.planned_hrs) AS planned_hrs"
+          logged_hrs: "SUM(b.logged_hrs) AS logged_hrs"
+          overdue_hrs: "SUM(b.overdue_hrs) AS overdue_hrs"
+          undated_hrs: "SUM(b.undated_hrs) AS undated_hrs"
+          free_hrs: "SUM(b.capacity_hrs - b.planned_hrs) AS free_hrs"
+          available_hrs: "SUM(b.capacity_hrs - b.planned_hrs) AS free_hrs"
+          capacity_cost: "SUM(b.capacity_cost) AS capacity_cost"
+          logged_cost: "SUM(b.logged_cost) AS logged_cost"
         columns:
           - name: resource_day_id
             type: VARCHAR

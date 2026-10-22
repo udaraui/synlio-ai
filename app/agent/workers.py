@@ -20,6 +20,7 @@ from app.agent.prompts import (
     get_formatter_prompt,
     get_worker_prompt,
     get_worker_user_context,
+    format_page_context,
 )
 
 def make_gate_keeper_node(llm: Optional[ChatOpenAI] = None):
@@ -426,28 +427,9 @@ def make_worker_node(llm: ChatOpenAI, domain: str, tool_func):
                 system_content += f"\n\n{worker_user_context}"
 
         # Inject contextual page parameters (if request originates from a page side drawer)
-        page_context = state.get("context")
-        if page_context and isinstance(page_context, dict):
-            context_lines = []
-            if page_context.get("resource_group_name"):
-                context_lines.append(f"- Current Resource Group / Pool: \"{page_context['resource_group_name']}\"")
-            elif page_context.get("resource_group_id"):
-                context_lines.append(f"- Current Resource Group ID: {page_context['resource_group_id']}")
-            if page_context.get("task_space_name"):
-                context_lines.append(f"- Current Task Space: \"{page_context['task_space_name']}\"")
-            elif page_context.get("task_space_id"):
-                context_lines.append(f"- Current Task Space ID: {page_context['task_space_id']}")
-            if page_context.get("parent_task_name"):
-                context_lines.append(f"- Current Parent Task: \"{page_context['parent_task_name']}\"")
-            elif page_context.get("parent_task_id"):
-                context_lines.append(f"- Current Parent Task ID: {page_context['parent_task_id']}")
-            if page_context.get("ticket_space_name"):
-                context_lines.append(f"- Current Ticket Space: \"{page_context['ticket_space_name']}\"")
-            elif page_context.get("ticket_space_id"):
-                context_lines.append(f"- Current Ticket Space ID: {page_context['ticket_space_id']}")
-
-            if context_lines:
-                system_content += f"\n\nCURRENT PAGE CONTEXT:\n" + "\n".join(context_lines) + "\n(Unless the user explicitly asks for company-wide or other data, prioritize or filter queries by this current page context).\n"
+        page_context_str = format_page_context(state.get("context"))
+        if page_context_str:
+            system_content += f"\n\n{page_context_str}"
         
         # Bind the specialized tool and force it to be called
         llm_with_tools = llm.bind_tools([tool_func], tool_choice="any")

@@ -1,54 +1,98 @@
 import os
 import contextvars
 import asyncio
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List, Tuple
 import httpx
 
-# Request-scoped dictionary tracking node-by-node execution telemetry
-node_telemetry_tracker = contextvars.ContextVar("node_telemetry_tracker", default={})
-last_executed_queries = contextvars.ContextVar("last_executed_queries", default=[])
+# =============================================================================
+# 1. REQUEST-SCOPED CONTEXT VARIABLES
+# Defaulting to None prevents mutable collection sharing across async tasks.
+# =============================================================================
+
+node_telemetry_tracker: contextvars.ContextVar[Optional[Dict[str, Any]]] = contextvars.ContextVar(
+    "node_telemetry_tracker", default=None
+)
+last_executed_queries: contextvars.ContextVar[Optional[List[Dict[str, Any]]]] = contextvars.ContextVar(
+    "last_executed_queries", default=None
+)
+global_token_usage: contextvars.ContextVar[Optional[List[int]]] = contextvars.ContextVar(
+    "global_token_usage", default=None
+)
+
 
 def init_telemetry():
+    """Initializes/resets all request-scoped telemetry and token counters."""
     node_telemetry_tracker.set({})
     last_executed_queries.set([])
+    global_token_usage.set([0, 0, 0])
+
 
 def get_telemetry_tracker() -> Dict[str, Any]:
-    return node_telemetry_tracker.get()
+    """Returns the current request's node telemetry dictionary, auto-initializing if needed."""
+    tracker = node_telemetry_tracker.get()
+    if tracker is None:
+        tracker = {}
+        node_telemetry_tracker.set(tracker)
+    return tracker
+
+
+def get_token_usage() -> List[int]:
+    """Returns [total_tokens, input_tokens, output_tokens] for the current request."""
+    usage = global_token_usage.get()
+    if usage is None:
+        usage = [0, 0, 0]
+        global_token_usage.set(usage)
+    return usage
+
 
 def record_executed_query(table: str, sql: str, row_count: int, total_count: int):
+    """Records executed database queries into the request's telemetry tracker."""
     entry = {
         "table": table,
         "sql": sql,
         "rowCount": row_count,
         "totalCount": total_count,
     }
+
     try:
-        tracker = node_telemetry_tracker.get()
+        tracker = get_telemetry_tracker()
         if "_executed_queries" not in tracker:
             tracker["_executed_queries"] = []
         tracker["_executed_queries"].append(entry)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[TELEMETRY] Error recording query in tracker: {e}")
+
     try:
-        queries = list(last_executed_queries.get())
+        queries = last_executed_queries.get()
+        if queries is None:
+            queries = []
+        else:
+            queries = list(queries)
         queries.append(entry)
         last_executed_queries.set(queries)
     except Exception as e:
         print(f"[TELEMETRY] Error recording executed query: {e}")
 
-def get_executed_queries():
+
+def get_executed_queries() -> List[Dict[str, Any]]:
+    """Retrieves all database queries executed during the current request."""
     try:
-        tracker_queries = node_telemetry_tracker.get().get("_executed_queries", [])
-        if tracker_queries:
-            return tracker_queries
+        tracker = node_telemetry_tracker.get()
+        if tracker and "_executed_queries" in tracker:
+            return tracker["_executed_queries"]
     except Exception:
         pass
     return last_executed_queries.get() or []
 
-def parse_tokens(response, default_model: str = "unknown"):
+
+# =============================================================================
+# 2. TOKEN USAGE PARSING
+# =============================================================================
+
+def parse_tokens(response: Any, default_model: str = "unknown") -> Tuple[int, int, int, int, str]:
     """
     Extracts (in_tokens, out_tokens, cache_tokens, total_tokens, model_name)
-    from a LangChain AIMessage or an OpenRouter Decisions response dictionary.
+    from a LangChain AIMessage or an OpenRouter response dictionary.
     """
     in_tokens = 0
     out_tokens = 0
@@ -67,6 +111,7 @@ def parse_tokens(response, default_model: str = "unknown"):
                 usage = getattr(response, "response_metadata", {}).get("token_usage", {})
             model_name = getattr(response, "response_metadata", {}).get("model_name", default_model)
 
+        # De-duplicate model string if repeated by proxy (e.g. "anthropic/claudeanthropic/claude")
         if isinstance(model_name, str):
             half = len(model_name) // 2
             if half > 0 and model_name[:half] == model_name[half:]:
@@ -75,8 +120,8 @@ def parse_tokens(response, default_model: str = "unknown"):
         if usage:
             in_tokens = usage.get("input_tokens", usage.get("prompt_tokens", 0)) or 0
             out_tokens = usage.get("output_tokens", usage.get("completion_tokens", 0)) or 0
-            
-            # Check prompt_tokens_details for cached tokens
+
+            # OpenRouter cache read details
             details = usage.get("prompt_tokens_details", {})
             if isinstance(details, dict):
                 cache_tokens = details.get("cached_tokens", 0) or 0
@@ -88,6 +133,11 @@ def parse_tokens(response, default_model: str = "unknown"):
         print(f"[TELEMETRY] Error parsing tokens: {e}")
 
     return in_tokens, out_tokens, cache_tokens, total_tokens, model_name
+
+
+# =============================================================================
+# 3. CONSOLE LOGGING
+# =============================================================================
 
 def _print_node_log(
     node: str,
@@ -126,6 +176,11 @@ def _print_node_log(
     elif extra_summary:
         print(f"  Details:  {extra_summary}")
 
+
+# =============================================================================
+# 4. NODE TELEMETRY RECORDING
+# =============================================================================
+
 def record_node_telemetry(
     node: str,
     latency_ms: int,
@@ -143,11 +198,13 @@ def record_node_telemetry(
 ):
     """
     Records telemetry for an individual node into the request's context-scoped tracker,
-    updates global token usage, and prints a clean standardized console log.
+    updates request token usage, and prints a standardized console log banner.
     """
-    # 1. If response is passed, parse tokens and model automatically
+    # 1. Parse tokens and model from response if provided
     if response is not None:
-        parsed_in, parsed_out, parsed_cache, parsed_tot, parsed_model = parse_tokens(response, default_model=model or "unknown")
+        parsed_in, parsed_out, parsed_cache, parsed_tot, parsed_model = parse_tokens(
+            response, default_model=model or "unknown"
+        )
         in_token = parsed_in if in_token is None else in_token
         out_token = parsed_out if out_token is None else out_token
         cache_token = parsed_cache if cache_token is None else cache_token
@@ -159,10 +216,9 @@ def record_node_telemetry(
     cache_val = int(cache_token or 0)
     total_val = int(total_tokens or (in_val + out_val))
 
-    # 2. Update global token usage for the request
+    # 2. Accumulate request token totals directly (no circular import)
     try:
-        from app.agent.state import global_token_usage
-        usage_list = global_token_usage.get()
+        usage_list = get_token_usage()
         usage_list[0] += total_val
         if len(usage_list) >= 3:
             usage_list[1] += in_val
@@ -170,8 +226,8 @@ def record_node_telemetry(
     except Exception:
         pass
 
-    # 3. Save into request-scoped tracker
-    tracker = node_telemetry_tracker.get()
+    # 3. Save node record into request-scoped tracker
+    tracker = get_telemetry_tracker()
     tracker[node] = {
         "model": model,
         "latencyMs": int(latency_ms),
@@ -185,7 +241,7 @@ def record_node_telemetry(
         "errorMessage": error_message,
     }
 
-    # 4. Standardized clean console logging
+    # 4. Print standardized console log
     _print_node_log(
         node=node,
         status=status,
@@ -197,6 +253,11 @@ def record_node_telemetry(
         total_tokens=total_val,
         extra_summary=extra_summary,
     )
+
+
+# =============================================================================
+# 5. ASYNC AUDIT DISPATCH
+# =============================================================================
 
 async def _send_telemetry_http(payload: Dict[str, Any]):
     backend_url = os.getenv("BACKEND_URL")
@@ -219,10 +280,11 @@ async def _send_telemetry_http(payload: Dict[str, Any]):
         print(f"  Audit Log:  Failed to post audit telemetry to backend ({endpoint}): {e}")
         print(f"{'='*80}\n")
 
+
 def dispatch_audit_telemetry(payload: Dict[str, Any]):
     """
     Dispatches the audit telemetry payload in a background non-blocking task.
-    Ensures ZERO delay on the SSE streaming response to the client.
+    Ensures zero delay on SSE streaming to the client.
     """
     try:
         asyncio.create_task(_send_telemetry_http(payload))
