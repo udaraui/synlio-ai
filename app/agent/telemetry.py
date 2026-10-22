@@ -199,7 +199,12 @@ def record_node_telemetry(
     )
 
 async def _send_telemetry_http(payload: Dict[str, Any]):
-    backend_url = os.getenv("BACKEND_INTERNAL_URL") or os.getenv("BACKEND_URL", "http://localhost:4000")
+    backend_url = os.getenv("BACKEND_URL")
+    if not backend_url:
+        print("  Audit Log:  BACKEND_URL not set in environment (.env). Audit log dispatch skipped.")
+        print(f"{'-'*80}\n")
+        return
+
     endpoint = f"{backend_url.rstrip('/')}/chat/internal/audit-telemetry"
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:

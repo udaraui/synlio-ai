@@ -113,8 +113,10 @@ def create_graph(llm: ChatOpenAI, orchestrator_llm: ChatOpenAI = None, formatter
                 ):
                     return True
             return False
-
-        max_rounds = int(os.getenv("QUERY_ROUND_COUNT", 2))
+        query_round_count_raw = os.getenv("QUERY_ROUND_COUNT")
+        if not query_round_count_raw:
+            print("[ENV ERROR] QUERY_ROUND_COUNT is not set in environment (.env)!")
+        max_rounds = int(query_round_count_raw) if query_round_count_raw else 1
         current_round = state.get("current_round", 1) or 1
         has_valid = _has_valid_query_results(tool_messages)
         tool_elapsed = time.time() - start_time

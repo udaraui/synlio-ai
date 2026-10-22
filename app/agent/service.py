@@ -16,8 +16,13 @@ class AgentResult(BaseModel):
 
 class InsightAgent:
     def __init__(self, key: str, worker_model: Optional[str] = None, orchestrator_model: Optional[str] = None):
-        self.worker_model = worker_model or os.getenv("WORKER_MODEL", "google/gemini-2.5-flash-lite")
-        self.orchestrator_model = orchestrator_model or os.getenv("ORCHESTRATOR_MODEL", "typesafe/jev-1.14")
+        self.worker_model = worker_model or os.getenv("WORKER_MODEL")
+        if not self.worker_model:
+            print("[ENV ERROR] WORKER_MODEL is not set in environment (.env)!")
+
+        self.orchestrator_model = orchestrator_model or os.getenv("ORCHESTRATOR_MODEL")
+        if not self.orchestrator_model:
+            print("[ENV ERROR] ORCHESTRATOR_MODEL is not set in environment (.env)!")
 
         # Worker LLM: streaming=False prevents OpenRouter SSE stream hangs on tool calling
         self.worker_llm = ChatOpenAI(
@@ -271,3 +276,5 @@ if api_key:
         insight_agent = InsightAgent(api_key)
     except Exception as e:
         print(f"Error initializing InsightAgent: {e}")
+else:
+    print("[ENV ERROR] LLM_API_KEY is not set in environment (.env)!")

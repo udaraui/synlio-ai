@@ -8,9 +8,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 pg_db_url = os.getenv("PG_DB_URL")
+if not pg_db_url:
+    print("[ENV ERROR] PG_DB_URL is not set in environment (.env)!")
 
-# Global limit for sample/preview queries (defaults to 200, configurable via SAMPLE_LIMIT env var)
-SAMPLE_LIMIT = int(os.getenv("SAMPLE_LIMIT", 200))
+sample_limit_raw = os.getenv("SAMPLE_LIMIT")
+if not sample_limit_raw:
+    print("[ENV ERROR] SAMPLE_LIMIT is not set in environment (.env)!")
+SAMPLE_LIMIT = int(sample_limit_raw) if sample_limit_raw else None
 
 def rows_to_toon(
     rows: list[dict], 
@@ -304,7 +308,7 @@ def _build_and_execute_sql(
             if effective_company_id is not None:
                 if not table_cols or "company_id" in table_cols:
                     comp_target = "b.company_id" if is_resource_table else "company_id"
-                    if os.getenv("DEBUG_SQL", "false").lower() == "true":
+                    if (os.getenv("DEBUG_SQL") or "").lower() == "true":
                         print(f"  [SECURITY] Company ID filter: {comp_target} = {int(effective_company_id)}")
                     filter_clauses.append(f"{comp_target} = {int(effective_company_id)}")
 
@@ -350,12 +354,12 @@ def _build_and_execute_sql(
             # 2. Determine sampling limit based on count and force flag
             is_sampled = False
             limit_clause = ""
-            if not force and total_count > SAMPLE_LIMIT:
+            if not force and SAMPLE_LIMIT and total_count > SAMPLE_LIMIT:
                 is_sampled = True
                 limit_clause = f" LIMIT {SAMPLE_LIMIT}"
                 
             data_sql = f"SELECT {cols_str} FROM {from_clause}{where_clause}{group_by_clause}{having_clause}{order_by_clause}{limit_clause};"
-            if os.getenv("DEBUG_SQL", "false").lower() == "true":
+            if (os.getenv("DEBUG_SQL") or "").lower() == "true":
                 print(f"  [DEBUG SQL] {data_sql}")
             
             result = conn.execute(text(data_sql))

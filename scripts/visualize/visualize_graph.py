@@ -19,8 +19,10 @@ from app.agent.graph import create_graph
 
 def main():
     print("Compiling LangGraph state graph...")
-    # Dummy LLM instance is sufficient to construct the graph schema
-    dummy_llm = ChatOpenAI(model="gemini-2.0-flash-001", api_key=os.getenv("OPENROUTER_API_KEY", "dummy"))
+    api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENROUTER_API_KEY")
+    if not api_key:
+        print("[ENV ERROR] LLM_API_KEY is not set in environment (.env)!")
+    dummy_llm = ChatOpenAI(model="gemini-2.0-flash-001", api_key=api_key or "missing_key")
     compiled_graph = create_graph(dummy_llm)
     graph = compiled_graph.get_graph()
 

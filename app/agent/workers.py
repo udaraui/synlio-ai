@@ -66,7 +66,9 @@ def make_gate_keeper_node(llm: Optional[ChatOpenAI] = None):
             state_description += f"Conversation History:\n{history_str.strip()}\n\n"
         state_description += f"The user asked the following question: {user_query}"
 
-        model_name = os.getenv("GATE_KEEPER_MODEL") or os.getenv("GUARDRAIL_MODEL", "typesafe/jev-1.14")
+        model_name = os.getenv("GATE_KEEPER_MODEL")
+        if not model_name:
+            print("[ENV ERROR] GATE_KEEPER_MODEL is not set in environment (.env)!")
 
         raw_key = getattr(llm, "openai_api_key", None) if llm else None
         if hasattr(raw_key, "get_secret_value"):
@@ -75,7 +77,9 @@ def make_gate_keeper_node(llm: Optional[ChatOpenAI] = None):
             api_key = str(raw_key) if raw_key else None
 
         if not api_key or api_key.startswith("***"):
-            api_key = os.getenv("JEV_API_KEY") or os.getenv("OPENROUTER_API_KEY") or os.getenv("LLM_API_KEY")
+            api_key = os.getenv("LLM_API_KEY")
+            if not api_key:
+                print("[ENV ERROR] LLM_API_KEY is not set in environment (.env)!")
 
         payload = {
             "model": model_name,
@@ -392,7 +396,9 @@ def make_worker_node(llm: ChatOpenAI, domain: str, tool_func):
             user_pool = None
             try:
                 pg_db_url = os.getenv("PG_DB_URL")
-                if pg_db_url:
+                if not pg_db_url:
+                    print("[ENV ERROR] PG_DB_URL is not set in environment (.env)!")
+                else:
                     engine = get_db_engine(pg_db_url)
                     with engine.connect() as conn:
                         if company_id is not None:
