@@ -189,19 +189,19 @@ def make_gate_keeper_node(llm: Optional[ChatOpenAI] = None):
                 safety_status = "SAFE"
 
             elapsed = time.time() - start_time
-            print(f"[GATE_KEEPER] Jev score: {score_float:.3f} (Threshold: {GATE_KEEPER_THRESHOLD}) -> {safety_status}")
-            print_usage("GATE_KEEPER", result_data, elapsed, question=user_query)
+            print(f"[gate_keeper] Jev score: {score_float:.3f} (Threshold: {GATE_KEEPER_THRESHOLD}) -> {safety_status}")
+            print_usage("gate_keeper", result_data, elapsed, question=user_query)
             print()
 
         except Exception as e:
             elapsed = time.time() - start_time
-            print(f"[GATE_KEEPER] Warning: Jev API error ({e}). Defaulting to SAFE to prevent user disruption.")
+            print(f"[gate_keeper] Warning: Jev API error ({e}). Defaulting to SAFE to prevent user disruption.")
             is_injection = False
             safety_status = "SAFE"
             score_float = 0.0
 
         if is_injection:
-            print("[GATE_KEEPER] Action: Flagged malicious prompt. Terminating immediately at GATE_KEEPER with safe refusal.")
+            print("[gate_keeper] Action: Flagged malicious prompt. Terminating immediately at gate_keeper with safe refusal.")
             return {
                 "messages": [AIMessage(content=GATE_KEEPER_REFUSAL_MESSAGE)],
                 "is_injection": True,

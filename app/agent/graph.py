@@ -145,7 +145,7 @@ def create_graph(llm: ChatOpenAI, orchestrator_llm: ChatOpenAI = None, formatter
     # Graph Construction (7 Distinct Nodes)
     # -------------------------------------------------------------------------
     builder = StateGraph(AgentState)
-    builder.add_node("GATE_KEEPER", gate_keeper)
+    builder.add_node("gate_keeper", gate_keeper)
     builder.add_node("orchestrator", orchestrator)
     builder.add_node("project_analytics", project_worker)
     builder.add_node("ticket_analytics", ticket_worker)
@@ -156,12 +156,12 @@ def create_graph(llm: ChatOpenAI, orchestrator_llm: ChatOpenAI = None, formatter
     # -------------------------------------------------------------------------
     # Routing Functions & Conditional Edges
     # -------------------------------------------------------------------------
-    # START always passes through GATE_KEEPER first for prompt safety evaluation
-    builder.add_edge(START, "GATE_KEEPER")
+    # START always passes through gate_keeper first for prompt safety evaluation
+    builder.add_edge(START, "gate_keeper")
 
     def route_after_gate_keeper(state: AgentState):
         if state.get("is_injection"):
-            print("[GATE_KEEPER ROUTING] Malicious prompt flagged. Terminating graph directly at END.")
+            print("[gate_keeper ROUTING] Malicious prompt flagged. Terminating graph directly at END.")
             return END
         raw_workers = state.get("active_workers") or []
         active_workers = [w for w in raw_workers if w in workers_map]
@@ -171,7 +171,7 @@ def create_graph(llm: ChatOpenAI, orchestrator_llm: ChatOpenAI = None, formatter
         return "orchestrator"
 
     builder.add_conditional_edges(
-        "GATE_KEEPER",
+        "gate_keeper",
         route_after_gate_keeper,
         {
             END: END,

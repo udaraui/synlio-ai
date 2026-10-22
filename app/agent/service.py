@@ -133,7 +133,7 @@ class InsightAgent:
                 mode, payload = item
                 if mode == "updates" and isinstance(payload, dict):
                     for node_name, node_output in payload.items():
-                        if node_name == "GATE_KEEPER":
+                        if node_name == "gate_keeper":
                             if node_output.get("is_injection"):
                                 msgs = node_output.get("messages", [])
                                 if msgs and not formatter_started:
