@@ -308,7 +308,7 @@ def _build_and_execute_sql(
             if effective_company_id is not None:
                 if not table_cols or "company_id" in table_cols:
                     comp_target = "b.company_id" if is_resource_table else "company_id"
-                    if (os.getenv("DEBUG_SQL") or "").lower() == "true":
+                    if (os.getenv("DEBUG_SQL", "true")).lower() == "true":
                         print(f"  [SECURITY] Company ID filter: {comp_target} = {int(effective_company_id)}")
                     filter_clauses.append(f"{comp_target} = {int(effective_company_id)}")
 
@@ -359,7 +359,7 @@ def _build_and_execute_sql(
                 limit_clause = f" LIMIT {SAMPLE_LIMIT}"
                 
             data_sql = f"SELECT {cols_str} FROM {from_clause}{where_clause}{group_by_clause}{having_clause}{order_by_clause}{limit_clause};"
-            if (os.getenv("DEBUG_SQL") or "").lower() == "true":
+            if (os.getenv("DEBUG_SQL", "true")).lower() == "true":
                 print(f"  [DEBUG SQL] {data_sql}")
             
             result = conn.execute(text(data_sql))

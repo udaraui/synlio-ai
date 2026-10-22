@@ -18,8 +18,9 @@ WORKDIR /app
 # Copy the virtual environment from the builder stage
 COPY --from=builder /opt/venv /opt/venv
 
-# Ensure the virtual environment is used
+# Ensure the virtual environment is used and stdout is unbuffered for Azure log streaming
 ENV PATH="/opt/venv/bin:$PATH"
+ENV PYTHONUNBUFFERED=1
 
 # Copy source code
 COPY . .
