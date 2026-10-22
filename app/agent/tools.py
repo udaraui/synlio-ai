@@ -304,7 +304,8 @@ def _build_and_execute_sql(
             if effective_company_id is not None:
                 if not table_cols or "company_id" in table_cols:
                     comp_target = "b.company_id" if is_resource_table else "company_id"
-                    print(f"[SECURITY] Enforcing Company ID filter: {comp_target} = {int(effective_company_id)} on table '{table_name}'")
+                    if os.getenv("DEBUG_SQL", "false").lower() == "true":
+                        print(f"  [SECURITY] Company ID filter: {comp_target} = {int(effective_company_id)}")
                     filter_clauses.append(f"{comp_target} = {int(effective_company_id)}")
 
             where_clause = ""
@@ -329,16 +330,21 @@ def _build_and_execute_sql(
             else:
                 count_sql = f"SELECT COUNT(*) FROM {from_clause}{where_clause};"
 
-            print("[TOOL]===============================================================")
-            print("Checking total count query:")
-            print(count_sql)
             count_res = conn.execute(text(count_sql))
             total_count = count_res.scalar() or 0
-            print(f"Total matching records: {total_count}")
             
             if total_count == 0:
                 elapsed = time.time() - start_time
-                print(f"Query executed. Forwarding 0 rows to Formatter. | Time: {elapsed:.2f}s\n")
+                try:
+                    from app.agent.telemetry import record_executed_query
+                    record_executed_query(
+                        table=table_name,
+                        sql=count_sql,
+                        row_count=0,
+                        total_count=0,
+                    )
+                except Exception:
+                    pass
                 return "Query returned zero rows."
                 
             # 2. Determine sampling limit based on count and force flag
@@ -349,16 +355,25 @@ def _build_and_execute_sql(
                 limit_clause = f" LIMIT {SAMPLE_LIMIT}"
                 
             data_sql = f"SELECT {cols_str} FROM {from_clause}{where_clause}{group_by_clause}{having_clause}{order_by_clause}{limit_clause};"
-            print("Executing data query:")
-            print(data_sql)
-            print(f"Force: {force} | Sampled (Limit {SAMPLE_LIMIT}): {is_sampled}")
+            if os.getenv("DEBUG_SQL", "false").lower() == "true":
+                print(f"  [DEBUG SQL] {data_sql}")
             
             result = conn.execute(text(data_sql))
             rows = result.fetchall()
             json_rows = [dict(row._mapping) for row in rows]
             
+            try:
+                from app.agent.telemetry import record_executed_query
+                record_executed_query(
+                    table=table_name,
+                    sql=data_sql,
+                    row_count=len(rows),
+                    total_count=total_count,
+                )
+            except Exception:
+                pass
+
             elapsed = time.time() - start_time
-            print(f"Query executed. Forwarding {len(rows)} rows (in TOON format, Total: {total_count}) to Formatter. | Time: {elapsed:.2f}s\n")
             return rows_to_toon(json_rows, name=table_name, total_count=total_count, is_sampled=is_sampled, force=force)
     except Exception as e:
         elapsed = time.time() - start_time

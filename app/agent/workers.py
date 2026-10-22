@@ -8,8 +8,9 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_core.runnables import RunnableConfig
 
-from app.agent.state import AgentState, global_token_usage
+from app.agent.state import AgentState
 from app.agent.tools import get_db_engine
+from app.agent.telemetry import record_node_telemetry
 from app.agent.prompts import (
     ORCHESTRATOR_SYSTEM_PROMPT,
     ORCHESTRATOR_QUESTIONS,
@@ -20,68 +21,6 @@ from app.agent.prompts import (
     get_worker_prompt,
     get_worker_user_context,
 )
-
-def print_usage(node_name: str, response, elapsed: float = 0.0, question: str = ""):
-    total = 0
-    try:
-        usage = None
-        model_name = "unknown"
-        
-        if isinstance(response, dict):
-            usage = response.get("usage", {})
-            model_name = response.get("model", "unknown")
-        else:
-            usage = getattr(response, "usage_metadata", None)
-            if not usage:
-                usage = getattr(response, "response_metadata", {}).get("token_usage", {})
-            model_name = getattr(response, "response_metadata", {}).get("model_name", "unknown")
-        
-        # LangChain streaming bug: merges string metadata across chunks, doubling the model name
-        if isinstance(model_name, str):
-            half = len(model_name) // 2
-            if half > 0 and model_name[:half] == model_name[half:]:
-                model_name = model_name[:half]
-        
-        if usage:
-            in_tokens = usage.get("input_tokens", usage.get("prompt_tokens", 0))
-            out_tokens = usage.get("output_tokens", usage.get("completion_tokens", 0))
-            total = usage.get("total_tokens", 0) or (in_tokens + out_tokens)
-            time_str = f" | Time: {elapsed:.2f}s" if elapsed else ""
-            print(f"Token Usage - In: {in_tokens} | Out: {out_tokens} | Total: {total}{time_str}")
-            usage_list = global_token_usage.get()
-            usage_list[0] += total
-            if len(usage_list) >= 3:
-                usage_list[1] += in_tokens
-                usage_list[2] += out_tokens
-            
-            # Log to CSV
-            import os
-            import csv
-            from datetime import datetime
-            
-            output_dir = os.path.join("scripts", "benchmark")
-            os.makedirs(output_dir, exist_ok=True)
-            csv_file = os.path.join(output_dir, "benchmark_models_node_wise.csv")
-            file_exists = os.path.isfile(csv_file)
-            
-            with open(csv_file, mode='a', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-                if not file_exists:
-                    writer.writerow(["Timestamp", "Question", "Node", "Model", "In Tokens", "Out Tokens", "Total Tokens", "Time (s)"])
-                
-                writer.writerow([
-                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    question,
-                    node_name,
-                    model_name,
-                    in_tokens,
-                    out_tokens,
-                    total,
-                    f"{elapsed:.2f}"
-                ])
-    except Exception as e:
-        print(f"Error logging usage: {e}")
-    return total
 
 def make_gate_keeper_node(llm: Optional[ChatOpenAI] = None):
     """
@@ -114,10 +53,6 @@ def make_gate_keeper_node(llm: Optional[ChatOpenAI] = None):
             }
 
         start_time = time.time()
-        print("\n=======================================================", flush=True)
-        print("--- [PIPELINE START] Gate Keeper: Analyzing Prompt Safety with Jev Model ---", flush=True)
-        print(f"--- [DEBUG] User Question: '{user_query}' ---", flush=True)
-        print("=======================================================\n", flush=True)
 
         # Build conversation history context
         history_str = ""
@@ -189,16 +124,39 @@ def make_gate_keeper_node(llm: Optional[ChatOpenAI] = None):
                 safety_status = "SAFE"
 
             elapsed = time.time() - start_time
-            print(f"[gate_keeper] Jev score: {score_float:.3f} (Threshold: {GATE_KEEPER_THRESHOLD}) -> {safety_status}")
-            print_usage("gate_keeper", result_data, elapsed, question=user_query)
-            print()
+            record_node_telemetry(
+                node="gate_keeper",
+                latency_ms=int(elapsed * 1000),
+                response=result_data,
+                model=model_name,
+                status="INJECTION_BLOCKED" if is_injection else "SAFE",
+                input_data={"userQuery": user_query, "hasHistory": bool(history_str.strip())},
+                output_data={
+                    "isInjection": is_injection,
+                    "safetyStatus": safety_status,
+                    "injectionScore": score_float,
+                    "refusalMessage": GATE_KEEPER_REFUSAL_MESSAGE if is_injection else None,
+                },
+                error_message=GATE_KEEPER_REFUSAL_MESSAGE if is_injection else None,
+                extra_summary=f"Score: {score_float:.3f}",
+            )
 
         except Exception as e:
             elapsed = time.time() - start_time
-            print(f"[gate_keeper] Warning: Jev API error ({e}). Defaulting to SAFE to prevent user disruption.")
             is_injection = False
             safety_status = "SAFE"
             score_float = 0.0
+
+            record_node_telemetry(
+                node="gate_keeper",
+                latency_ms=int(elapsed * 1000),
+                model=model_name,
+                status="SAFE",
+                input_data={"userQuery": user_query, "hasHistory": bool(history_str.strip())},
+                output_data={"isInjection": False, "safetyStatus": "SAFE", "injectionScore": 0.0},
+                error_message=str(e),
+                extra_summary=f"Fallback SAFE (Error: {e})",
+            )
 
         if is_injection:
             print("[gate_keeper] Action: Flagged malicious prompt. Terminating immediately at gate_keeper with safe refusal.")
@@ -233,10 +191,7 @@ def make_orchestrator_node(llm: ChatOpenAI):
             import httpx
             
             if is_retry:
-                print(f"[ORCHESTRATOR] Re-orchestrating from the top (Round {current_round})...")
-            else:
-                print("[ORCHESTRATOR]=======================================================")
-                print("Analyzing prompt and extracting semantic context with Jeff (via OpenRouter Decisions API)...")
+                print(f"  [ORCHESTRATOR] ↻ Re-orchestrating from the top (Round {current_round})...")
             start_time = time.time()
             
             # Extract user query for usage logging
@@ -301,9 +256,6 @@ def make_orchestrator_node(llm: ChatOpenAI):
             domain_choice = domain_answer.get("choice", "none")
             domain_probs = domain_answer.get("probabilities", {})
             
-            print(f"Domain Choice: {domain_choice} (Confidence: {domain_answer.get('confidence', 0):.2f})")
-            print(f"Domain Probabilities: {domain_probs}")
-            
             domains = []
             for dom, prob in domain_probs.items():
                 if dom != "none" and prob > 0.25:
@@ -315,20 +267,24 @@ def make_orchestrator_node(llm: ChatOpenAI):
             frust_answer = answers.get("frustration_level", {})
             frustration = frust_answer.get("choice", "none")
             
-            print(f"Frustration Choice: {frust_answer.get('choice')} (Confidence: {frust_answer.get('confidence', 0):.2f})")
-            print(f"Frustration Probabilities: {frust_answer.get('probabilities', {})}")
-            print(f"User Frustration Level: {frustration.upper()}")
-            
             UNAVAILABLE_DOMAINS = {"project_analytics", "ticket_analytics"}
             requested_unavailable = [d for d in domains if d in UNAVAILABLE_DOMAINS]
             valid_active_workers = [d for d in domains if d not in UNAVAILABLE_DOMAINS]
 
             if requested_unavailable and not valid_active_workers:
                 unavailable_msg = "Project Analytics and Ticket Analytics are temporarily unavailable while system updates are underway. Only Resource Analytics is currently available."
-                print(f"[ORCHESTRATOR] Intercepted unavailable domain request: {requested_unavailable}. Returning notice.")
                 elapsed = time.time() - start_time
-                print_usage("ORCHESTRATOR", result_data, elapsed, question=user_query)
-                print()
+                record_node_telemetry(
+                    node="orchestrator",
+                    latency_ms=int(elapsed * 1000),
+                    response=result_data,
+                    model=model_name,
+                    status="UNAVAILABLE_DOMAIN",
+                    input_data={"userQuery": user_query, "isRetry": is_retry, "retryFeedback": retry_feedback},
+                    output_data={"activeWorkers": [], "requestedUnavailable": requested_unavailable},
+                    error_message=unavailable_msg,
+                    extra_summary=f"Unavailable: {requested_unavailable}",
+                )
                 return {
                     "messages": [AIMessage(content=unavailable_msg)],
                     "active_workers": [],
@@ -338,13 +294,26 @@ def make_orchestrator_node(llm: ChatOpenAI):
                     "error_message": unavailable_msg
                 }
             elif requested_unavailable and valid_active_workers:
-                print(f"[ORCHESTRATOR] Mixed request detected. Keeping available domains: {valid_active_workers} (filtering out {requested_unavailable})")
                 domains = valid_active_workers
 
-            print(f"Active Workers: {domains}")
             elapsed = time.time() - start_time
-            print_usage("ORCHESTRATOR", result_data, elapsed, question=user_query)
-            print()
+            record_node_telemetry(
+                node="orchestrator",
+                latency_ms=int(elapsed * 1000),
+                response=result_data,
+                model=model_name,
+                status="SUCCESS" if domains else "NO_DOMAIN_FALLBACK",
+                input_data={"userQuery": user_query, "isRetry": is_retry, "retryFeedback": retry_feedback},
+                output_data={
+                    "activeWorkers": domains,
+                    "domainChoice": domain_choice,
+                    "domainConfidence": domain_answer.get("confidence", 0),
+                    "domainProbabilities": domain_probs,
+                    "frustrationLevel": frustration,
+                    "frustrationConfidence": frust_answer.get("confidence", 0),
+                },
+                extra_summary=f"Domains: {domains} | Frustration: {frustration.upper()}",
+            )
 
             if not domains:
                 if frustration in ("high", "medium"):
@@ -501,9 +470,6 @@ def make_worker_node(llm: ChatOpenAI, domain: str, tool_func):
             )
 
         messages = [SystemMessage(content=system_content), HumanMessage(content=str(prompt_query))]
-        
-        print(f"[{domain.upper()}]==================================================")
-        print("Generating query...")
         start_time = time.time()
         
         try:
@@ -513,21 +479,37 @@ def make_worker_node(llm: ChatOpenAI, domain: str, tool_func):
             response = await llm_with_tools.ainvoke(messages, config={"callbacks": CallbackManager([])})
             elapsed = time.time() - start_time
             
-            # Log the output tool calls or response
-            if getattr(response, "tool_calls", None):
-                for tc in response.tool_calls:
-                    print(f"Tool Called: {tc['name']}")
-                    print(f"Arguments: {json.dumps(tc['args'], indent=2)}")
-            else:
+            tool_calls_data = [{"name": tc["name"], "args": tc["args"]} for tc in getattr(response, "tool_calls", [])] if getattr(response, "tool_calls", None) else []
+            tool_names = [tc["name"] for tc in tool_calls_data]
+
+            if not tool_calls_data:
                 content = (response.content or "").strip()
                 if not content:
                     friendly_text = f"I reviewed your request for {domain.replace('_', ' ')}, but did not find any specific data action to take. Please provide more details or ask a specific question."
                     response = AIMessage(content=friendly_text)
-                print(f"Output: {response.content}")
-                
-            print_usage(domain, response, elapsed, question=user_query)
-            print()
-            
+
+            record_node_telemetry(
+                node=domain,
+                latency_ms=int(elapsed * 1000),
+                response=response,
+                status="SUCCESS",
+                input_data={
+                    "userQuery": str(prompt_query),
+                    "todayDate": current_date_str,
+                    "userContext": {
+                        "userEmail": user_email,
+                        "userName": user_name,
+                        "userPool": user_pool,
+                    },
+                    "scope": {"companyId": company_id},
+                },
+                output_data={
+                    "toolCalls": tool_calls_data,
+                    "directText": getattr(response, "content", None) if not tool_calls_data else None,
+                },
+                extra_summary=f"Tools: {tool_names}" if tool_names else "Direct response",
+            )
+
             return {"messages": [response]}
         except Exception as e:
             error_str = str(e)
@@ -545,9 +527,6 @@ def make_formatter_node(llm: ChatOpenAI):
         human_msgs = [m for m in messages if isinstance(m, HumanMessage)]
         user_query = human_msgs[-1].content if human_msgs else ""
         active_workers = state.get("active_workers") or []
-        
-        print("[FORMATTER]==========================================")
-        print("Formatting final response...")
         start_time = time.time()
         
         if state.get("error_message"):
@@ -622,9 +601,29 @@ def make_formatter_node(llm: ChatOpenAI):
             ], config=config)
             elapsed = time.time() - start_time
             
-            print("Completed!")
-            print_usage("FORMATTER", response, elapsed, question=user_query)
-            
+            resp_content = getattr(response, "content", "") if response else ""
+            if isinstance(resp_content, list):
+                resp_content = "".join([c.get("text", "") if isinstance(c, dict) else str(c) for c in resp_content])
+
+            record_node_telemetry(
+                node="formatter",
+                latency_ms=int(elapsed * 1000),
+                response=response,
+                status="SUCCESS",
+                input_data={
+                    "userQuery": str(user_query),
+                    "chatMode": "panel",
+                    "frustrationLevel": frustration_level,
+                    "domainResultsCount": len(domain_results),
+                },
+                output_data={
+                    "formatMode": "panel",
+                    "responseLengthChars": len(str(resp_content)),
+                    "responsePreview": str(resp_content)[:200],
+                },
+                extra_summary=f"Chars: {len(str(resp_content))}",
+            )
+
             return {"messages": [response]}
         except Exception as e:
             error_str = str(e)

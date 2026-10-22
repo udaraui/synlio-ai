@@ -11,28 +11,32 @@ router = APIRouter()
 async def chat(
     message: str = Body(...),
     conversation_id: Optional[str] = Body(None),
+    request_id: Optional[str] = Body(None),
+    chat_mode: Optional[str] = Body("panel"),
     user_id: Optional[int] = Body(None),
     user_email: Optional[str] = Body(None),
+    user_name: Optional[str] = Body(None),
     company_id: Optional[int] = Body(None),
     agent: Optional[str] = Body(None),
     context: Optional[dict] = Body(None),
     scope: Optional[dict] = Body(None),
 ):
-    print("\n[INCOMING REQUEST CONTEXT]============================================")
-    print(f"Message:           {message}")
-    print(f"Conversation ID:   {conversation_id}")
-    print(f"User ID:           {user_id}")
-    print(f"User Email:        {user_email}")
-    print(f"Company ID:        {company_id}")
-    print(f"Agent (Preset):    {agent}")
-    print(f"Page Context:      {context}")
+    print(f"\n{'='*80}")
+    print("[INCOMING CHAT]")
+    print(f"  Query:           \"{message}\"")
+    print(f"  User:            {user_name or 'Anonymous'} ({user_email or 'no-email'}, ID: {user_id or '-'})")
+    print(f"  Company:         {company_id} | Mode: {chat_mode}")
+    if conversation_id:
+        print(f"  Conversation:    {conversation_id}")
+    if agent:
+        print(f"  Preset Agent:    {agent}")
     if scope:
-        print(f"Ticket Space IDs:  {scope.get('allowed_ticket_space_ids', [])}")
-        print(f"Task Space IDs:    {scope.get('allowed_task_space_ids', [])}")
-        print(f"Root Task Limits:  {scope.get('root_task_restrictions', {})}")
-    else:
-        print("Scope:             None")
-    print("======================================================================\n")
+        ticket_spaces = scope.get('allowed_ticket_space_ids', [])
+        task_spaces = scope.get('allowed_task_space_ids', [])
+        print(f"  Permission Scope:")
+        print(f"    Ticket Spaces: {ticket_spaces}")
+        print(f"    Task Spaces:   {task_spaces}")
+    # print(f"{'='*80}")
 
     if not insight_agent:
         async def unavailable_stream():
@@ -44,8 +48,11 @@ async def chat(
             async for chunk in insight_agent.astream_run(
                 message,
                 conversation_id=conversation_id,
+                request_id=request_id,
+                chat_mode=chat_mode,
                 user_id=user_id,
                 user_email=user_email,
+                user_name=user_name,
                 company_id=company_id,
                 agent=agent,
                 context=context,

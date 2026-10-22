@@ -1,4 +1,5 @@
 import os
+import time
 import asyncio
 from typing import cast
 from langgraph.graph import StateGraph, START, END
@@ -6,6 +7,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import ToolMessage
 
 from app.agent.state import AgentState
+from app.agent.telemetry import record_node_telemetry
 from app.agent.tools import query_project_data, query_ticket_data, query_resource_data
 from app.agent.workers import (
     make_gate_keeper_node,
@@ -40,6 +42,7 @@ def create_graph(llm: ChatOpenAI, orchestrator_llm: ChatOpenAI = None, formatter
     }
 
     async def custom_tool_executor_node(state: AgentState):
+        start_time = time.time()
         messages = state.get("messages", [])
         active_workers = state.get("active_workers") or []
         
@@ -114,6 +117,27 @@ def create_graph(llm: ChatOpenAI, orchestrator_llm: ChatOpenAI = None, formatter
         max_rounds = int(os.getenv("QUERY_ROUND_COUNT", 2))
         current_round = state.get("current_round", 1) or 1
         has_valid = _has_valid_query_results(tool_messages)
+        tool_elapsed = time.time() - start_time
+
+        executed_names = [getattr(tm, "name", "") for tm in tool_messages]
+        record_node_telemetry(
+            node="tool_executor",
+            latency_ms=int(tool_elapsed * 1000),
+            in_token=0,
+            out_token=0,
+            cache_token=0,
+            total_tokens=0,
+            model=None,
+            status="SUCCESS",
+            input_data={"toolsToExecute": [{"name": tc.get("name"), "args": tc.get("args")} for tc in all_tool_calls]},
+            output_data={
+                "toolsExecuted": executed_names,
+                "rowsReturned": len(tool_messages),
+                "needsRetry": not has_valid and current_round < max_rounds,
+                "dataSummary": f"Retrieved results across {len(tool_messages)} tool executions." if has_valid else "Query returned no results.",
+            },
+            extra_summary=f"Executed: {executed_names} ({len(tool_messages)} results)",
+        )
 
         if not has_valid and current_round < max_rounds:
             failure_reasons = []
@@ -166,7 +190,7 @@ def create_graph(llm: ChatOpenAI, orchestrator_llm: ChatOpenAI = None, formatter
         raw_workers = state.get("active_workers") or []
         active_workers = [w for w in raw_workers if w in workers_map]
         if active_workers:
-            print(f"[ORCHESTRATOR BYPASS] Active workers preset: {active_workers}. Direct dispatch to domain workers!")
+            print(f"\n[ORCHESTRATOR BYPASS] Active workers preset: {active_workers}. Direct dispatch to domain workers!")
             return active_workers if len(active_workers) > 1 else active_workers[0]
         return "orchestrator"
 
