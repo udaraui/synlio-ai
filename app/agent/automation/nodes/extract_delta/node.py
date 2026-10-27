@@ -94,6 +94,33 @@ def make_extract_delta_node(llm):
                 if v is not None:
                     merged[k] = v
             raw_drafts = [merged]
+        # If pending_draft was already a list of multiple tickets:
+        elif isinstance(pending_draft, list) and len(pending_draft) > 1:
+            if len(raw_drafts) == 1:
+                # LLM returned a common update (e.g. ticket space or priority) for the batch
+                single_delta = raw_drafts[0]
+                updated_list = []
+                for existing in pending_draft:
+                    merged = dict(existing)
+                    for k, v in single_delta.items():
+                        if v is not None:
+                            # Keep each ticket's distinct name & description
+                            if k in ("name", "description") and existing.get(k):
+                                continue
+                            if k == "assigneeName" and existing.get("assigneeName") and existing.get("assigneeName") != "me":
+                                continue
+                            merged[k] = v
+                    updated_list.append(merged)
+                raw_drafts = updated_list
+            elif len(raw_drafts) == len(pending_draft):
+                updated_list = []
+                for i, existing in enumerate(pending_draft):
+                    merged = dict(existing)
+                    for k, v in raw_drafts[i].items():
+                        if v is not None:
+                            merged[k] = v
+                    updated_list.append(merged)
+                raw_drafts = updated_list
 
         clean_drafts: List[Dict[str, Any]] = []
         all_missing_fields: List[str] = []

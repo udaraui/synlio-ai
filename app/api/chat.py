@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Union, Any, List, Dict
 from fastapi import APIRouter, Body
 from fastapi.responses import StreamingResponse
 from app.agent.service import insight_agent
@@ -21,8 +21,8 @@ async def chat(
     context: Optional[dict] = Body(None),
     scope: Optional[dict] = Body(None),
     history: Optional[list] = Body(None),
-    pending_draft: Optional[dict] = Body(None),
-    pendingDraft: Optional[dict] = Body(None),
+    pending_draft: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = Body(None),
+    pendingDraft: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = Body(None),
 ):
     active_pending_draft = pending_draft or pendingDraft
     print(f"\n{'='*80}")
@@ -37,7 +37,11 @@ async def chat(
     if context:
         print(f"  Context:         {context}")
     if active_pending_draft:
-        print(f"  Pending Draft:   {active_pending_draft.get('name', 'Untitled')}")
+        if isinstance(active_pending_draft, list):
+            names = [d.get('name', 'Untitled') for d in active_pending_draft if isinstance(d, dict)]
+            print(f"  Pending Drafts ({len(active_pending_draft)}): {', '.join(names)}")
+        elif isinstance(active_pending_draft, dict):
+            print(f"  Pending Draft:   {active_pending_draft.get('name', 'Untitled')}")
     if history:
         print(f"  Client History:  {len(history)} messages")
     if scope:

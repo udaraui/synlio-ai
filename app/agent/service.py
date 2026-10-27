@@ -1,7 +1,7 @@
 import os
 import time
 import uuid
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, Union, List
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage
@@ -139,6 +139,15 @@ def _dispatch_telemetry_payload(
     elif node_usage.get("orchestrator", {}).get("status") == "NO_DOMAIN_FALLBACK":
         status = "NO_DOMAIN_FALLBACK"
 
+    # Classify requestType based on executed nodes
+    request_type = "analytics"
+    if any(k.startswith("automation_") for k in node_usage.keys()):
+        request_type = "automation"
+    elif any(k in node_usage for k in ("orchestrator", "workers", "ticket_analytics", "project_analytics", "resource_analytics", "tool_executor")):
+        request_type = "analytics"
+    elif "general_chat" in node_usage:
+        request_type = "general_chat"
+
     payload = {
         "requestId": request_id,
         "conversationId": conversation_id or "default",
@@ -147,6 +156,7 @@ def _dispatch_telemetry_payload(
         "userEmail": user_email,
         "userName": user_name,
         "chatMode": chat_mode or "panel",
+        "requestType": request_type,
         "userQuery": query,
         "finalResponse": final_text or None,
         "status": status,
@@ -239,7 +249,7 @@ class InsightAgent:
         context: Optional[dict],
         scope: Optional[dict],
         history: Optional[list] = None,
-        pending_draft: Optional[dict] = None,
+        pending_draft: Optional[Union[dict, list]] = None,
         chat_mode: Optional[str] = "panel",
     ) -> Dict[str, Any]:
         """Constructs the initial AgentState dictionary from client history and current query."""
@@ -293,7 +303,7 @@ class InsightAgent:
         context: Optional[dict] = None,
         scope: Optional[dict] = None,
         history: Optional[list] = None,
-        pending_draft: Optional[dict] = None,
+        pending_draft: Optional[Union[dict, list]] = None,
     ):
         """Asynchronously streams user status messages and token-by-token responses."""
         init_telemetry()

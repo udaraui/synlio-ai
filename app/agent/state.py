@@ -1,4 +1,4 @@
-from typing import Annotated, TypedDict, Sequence, Optional, List, Dict, Any
+from typing import Annotated, TypedDict, Sequence, Optional, List, Dict, Any, Union
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 
@@ -41,7 +41,7 @@ class AgentState(TypedDict, total=False):
 
     # Routing & Automation
     intent: Optional[str]  # "automation" | "analytics" | "general_chat"
-    pending_draft: Optional[Dict[str, Any]]
+    pending_draft: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]]
     draft: Optional[Dict[str, Any]]
     missing_fields: Optional[List[str]]
     needs_fields: Optional[List[Dict[str, Any]]]

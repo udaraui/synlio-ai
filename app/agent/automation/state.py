@@ -1,11 +1,11 @@
-from typing import TypedDict, Optional, List, Dict, Any, Sequence
+from typing import TypedDict, Optional, List, Dict, Any, Sequence, Union
 from langchain_core.messages import BaseMessage
 
 
 class AutomationState(TypedDict, total=False):
     """Internal state schema for the Automation Subgraph workflow."""
     messages: Sequence[BaseMessage]
-    pending_draft: Optional[Dict[str, Any]]
+    pending_draft: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]]
     draft: Optional[Dict[str, Any]]
     missing_fields: List[str]
     needs_fields: List[Dict[str, Any]]

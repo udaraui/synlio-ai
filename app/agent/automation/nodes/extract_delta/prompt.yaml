@@ -39,6 +39,8 @@ system_prompt: |
   8. Multiple Tickets:
      - If the user asks to create multiple tickets (e.g. "create two tickets", "create 2 tickets", "tickets for google and microsoft", multiple separate items), you MUST output a JSON array of ticket objects.
      - Each item in the array must be a full ticket object with its own name, assigneeName, severityName, etc.
+     - CRITICAL: If the Existing Draft is already an array of multiple tickets, or if the conversation discusses multiple tickets, you MUST PRESERVE ALL tickets in the JSON array!
+     - When the user selects or types a space name (e.g. "PUNSARA'S TEST SPACE"), apply that ticketSpaceName to ALL tickets in the array, keeping each ticket's individual name, description, and assigneeName. Never drop tickets from the array!
 
   OUTPUT JSON ONLY:
   For a single ticket:
