@@ -277,7 +277,7 @@ def make_orchestrator_node(llm: ChatOpenAI):
             valid_active_workers = [d for d in domains if d not in UNAVAILABLE_DOMAINS]
 
             if requested_unavailable and not valid_active_workers:
-                unavailable_msg = "Project Analytics and Ticket Analytics are temporarily unavailable while system updates are underway. Only Resource Analytics is currently available."
+                unavailable_msg = "Project Analytics, Ticket Analytics, and Project Automation are temporarily unavailable while system updates are underway. Only Resource Analytics and Ticket Automation are currently available."
                 elapsed = time.time() - start_time
                 record_node_telemetry(
                     node="orchestrator",

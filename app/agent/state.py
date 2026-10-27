@@ -1,4 +1,4 @@
-from typing import Annotated, TypedDict, Sequence, Optional, List, Dict
+from typing import Annotated, TypedDict, Sequence, Optional, List, Dict, Any
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 
@@ -11,6 +11,9 @@ class UserScope(TypedDict, total=False):
     allowed_ticket_space_ids: Optional[List[int]]
     allowed_task_space_ids: Optional[List[int]]
     root_task_restrictions: Optional[Dict[str, List[int]]]
+    can_create_ticket: Optional[bool]
+    allowed_spaces: Optional[List[Dict[str, Any]]]
+    active_space_config: Optional[Dict[str, Any]]
 
 
 class AgentState(TypedDict, total=False):
@@ -29,11 +32,23 @@ class AgentState(TypedDict, total=False):
     company_id: Optional[int]
     scope: Optional[UserScope]
     context: Optional[dict]
+    chat_mode: Optional[str]  # "panel" | "full"
 
     # Safety & Gate Keeper
     is_injection: Optional[bool]
     safety_status: Optional[str]
     injection_score: Optional[float]
+
+    # Routing & Automation
+    intent: Optional[str]  # "automation" | "analytics" | "general_chat"
+    pending_draft: Optional[Dict[str, Any]]
+    draft: Optional[Dict[str, Any]]
+    missing_fields: Optional[List[str]]
+    needs_fields: Optional[List[Dict[str, Any]]]
+    is_complete: Optional[bool]
+    automation_summary: Optional[str]
+    summary: Optional[str]
+    warnings: Optional[List[str]]
 
     # Sentiment & Tone
     frustration_level: Optional[str]

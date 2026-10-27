@@ -272,7 +272,7 @@ async def _send_telemetry_http(payload: Dict[str, Any]):
             resp = await client.post(endpoint, json=payload)
             if resp.status_code in (200, 202):
                 print(f"  Audit Log:  Enqueued to Service Bus!")
-                print(f"{'-'*80}\n")
+                # print(f"{'-'*80}\n")
             else:
                 print(f"  Audit Log:  Backend returned status {resp.status_code}: {resp.text}")
                 print(f"{'='*80}\n")

@@ -5,9 +5,10 @@ from typing import Optional, Dict, Any, Tuple
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage
+import json
 from pydantic import BaseModel
 from app.agent.state import AgentState
-from app.agent.graph import create_graph
+from app.agent.master_graph import create_master_graph
 from app.agent.telemetry import (
     init_telemetry,
     get_telemetry_tracker,
@@ -45,6 +46,40 @@ def _resolve_status_update(node_name: str, node_output: Dict[str, Any]) -> Tuple
             msgs = node_output.get("messages", [])
             if msgs:
                 return None, getattr(msgs[-1], "content", str(msgs[-1]))
+
+    elif node_name == "dispatcher":
+        intent = node_output.get("intent")
+        if intent == "automation":
+            return "__REPLACE__Drafting your ticket...", None
+        elif intent == "general_chat":
+            msgs = node_output.get("messages", [])
+            if msgs:
+                return None, getattr(msgs[-1], "content", str(msgs[-1]))
+        return "__REPLACE__Analyzing workspace data...", None
+
+    elif node_name == "automation":
+        draft = node_output.get("draft")
+        drafts = node_output.get("drafts")
+        if not drafts and draft:
+            drafts = [draft]
+        missing_fields = node_output.get("missing_fields") or []
+        needs_fields = node_output.get("needs_fields") or []
+        summary = (
+            node_output.get("automation_summary")
+            or node_output.get("summary")
+            or ("Which ticket space should I place the tickets?" if (drafts and len(drafts) > 1) else "Ticket draft ready")
+        )
+        
+        payload = {
+            "action": "CREATE_TICKET",
+            "status": "NEEDS_INPUT" if missing_fields else "READY",
+            "summary": summary,
+            "draft": draft,
+            "drafts": drafts if drafts else ([draft] if draft else []),
+            "warnings": node_output.get("warnings") or [],
+            "needs": needs_fields,
+        }
+        return None, f"{summary}\n\n__DRAFT_PAYLOAD__{json.dumps(payload)}"
 
     elif node_name == "orchestrator":
         active_workers = node_output.get("active_workers") or []
@@ -124,6 +159,17 @@ def _dispatch_telemetry_payload(
         "errorMessage": None,
     }
 
+    # If human inner loop is needed (e.g. incomplete ticket draft awaiting user action), do not create an AI log
+    extract_delta_output = node_usage.get("automation_extract_delta", {}).get("output", {})
+    if extract_delta_output.get("is_complete") is False or "automation_clarify" in node_usage:
+        print("\n[REQUEST WAITING FOR HUMAN INPUT]")
+        print(f"  Request ID: {request_id}")
+        print(f"  Time:       {elapsed:.2f}s")
+        print(f"  Tokens:     {total_tokens:,} (In: {in_tokens:,}, Out: {out_tokens:,}, Cache: {cache_tokens:,})")
+        print(f"  Status:     HUMAN_INPUT_NEEDED")
+        print(f"  Audit Log:  Skipped (Human inner loop needed - request not completed)")
+        return
+
     print("\n[REQUEST COMPLETE]")
     print(f"  Request ID: {request_id}")
     print(f"  Time:       {elapsed:.2f}s")
@@ -176,8 +222,8 @@ class InsightAgent:
 
         self.llm = self.worker_llm
 
-        # Build and compile the LangGraph workflow
-        self.agent_executor = create_graph(
+        # Build and compile the LangGraph workflow using Master Graph
+        self.agent_executor = create_master_graph(
             llm=self.worker_llm,
             orchestrator_llm=self.orchestrator_llm,
             formatter_llm=self.formatter_llm
@@ -193,6 +239,8 @@ class InsightAgent:
         context: Optional[dict],
         scope: Optional[dict],
         history: Optional[list] = None,
+        pending_draft: Optional[dict] = None,
+        chat_mode: Optional[str] = "panel",
     ) -> Dict[str, Any]:
         """Constructs the initial AgentState dictionary from client history and current query."""
         messages = []
@@ -211,6 +259,13 @@ class InsightAgent:
 
         messages.append(HumanMessage(content=query))
 
+        effective_mode = (
+            chat_mode
+            or (context.get("chatMode") if isinstance(context, dict) else None)
+            or (context.get("mode") if isinstance(context, dict) else None)
+            or "panel"
+        )
+
         return {
             "messages": messages,
             "user_id": user_id,
@@ -218,8 +273,10 @@ class InsightAgent:
             "company_id": company_id,
             "scope": scope,
             "context": context,
+            "chat_mode": effective_mode,
             "active_workers": [agent] if agent else None,
             "error_message": None,
+            "pending_draft": pending_draft,
         }
 
     async def astream_run(
@@ -236,6 +293,7 @@ class InsightAgent:
         context: Optional[dict] = None,
         scope: Optional[dict] = None,
         history: Optional[list] = None,
+        pending_draft: Optional[dict] = None,
     ):
         """Asynchronously streams user status messages and token-by-token responses."""
         init_telemetry()
@@ -257,7 +315,7 @@ class InsightAgent:
         # When client sends explicit history, each request is completely stateless
         thread_id = str(uuid.uuid4()) if history else (conversation_id or "default")
         config = {"configurable": {"thread_id": thread_id}}
-        input_state = self._build_input_state(query, user_id, user_email, company_id, agent, context, scope, history)
+        input_state = self._build_input_state(query, user_id, user_email, company_id, agent, context, scope, history, pending_draft, chat_mode)
 
         try:
             async for item in self.agent_executor.astream(input_state, config=config, stream_mode=["updates", "messages"]):

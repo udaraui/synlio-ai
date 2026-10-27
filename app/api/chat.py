@@ -21,7 +21,10 @@ async def chat(
     context: Optional[dict] = Body(None),
     scope: Optional[dict] = Body(None),
     history: Optional[list] = Body(None),
+    pending_draft: Optional[dict] = Body(None),
+    pendingDraft: Optional[dict] = Body(None),
 ):
+    active_pending_draft = pending_draft or pendingDraft
     print(f"\n{'='*80}")
     print("[INCOMING CHAT]")
     print(f"  Query:           \"{message}\"")
@@ -33,6 +36,8 @@ async def chat(
         print(f"  Preset Agent:    {agent}")
     if context:
         print(f"  Context:         {context}")
+    if active_pending_draft:
+        print(f"  Pending Draft:   {active_pending_draft.get('name', 'Untitled')}")
     if history:
         print(f"  Client History:  {len(history)} messages")
     if scope:
@@ -62,12 +67,13 @@ async def chat(
                 context=context,
                 scope=scope,
                 history=history,
+                pending_draft=active_pending_draft,
             ):
                 yield chunk
         except Exception as e:
             print(f"--- INTERNAL SERVER ERROR ---")
             traceback.print_exc()
-            yield f"__REPLACE__Error occurred"
-            yield f"\n\nI encountered an unexpected issue while trying to process your request. Please try rephrasing or trying again later."
+            yield f"__REPLACE__Sorry! I encountered an unexpected issue while processing your request!"
+            yield f"\nPlease try rephrasing or trying again."
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

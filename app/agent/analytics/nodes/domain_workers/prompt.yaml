@@ -1,0 +1,15 @@
+# ==============================================================================
+# DOMAIN WORKERS CONFIGURATION
+# Specialized domain execution prompts for project, ticket, and resource analytics
+# ==============================================================================
+
+domains:
+  project_analytics:
+    description: "Analyzes project milestones, task hierarchy, schedules, delays, and planned effort."
+    skills: "Generate PostgreSQL queries against project and task tables."
+  ticket_analytics:
+    description: "Analyzes tickets, bugs, incident queues, severities, and resolution metrics."
+    skills: "Generate PostgreSQL queries against ticket tables and metrics."
+  resource_analytics:
+    description: "Analyzes team allocation, workload, utilization, and capacity."
+    skills: "Generate PostgreSQL queries against resource pools and team allocations."

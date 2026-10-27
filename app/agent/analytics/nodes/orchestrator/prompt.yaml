@@ -1,0 +1,31 @@
+# ==============================================================================
+# ORCHESTRATOR CONFIGURATION & ROUTING PROMPTS
+# Evaluated via OpenRouter Decisions API or Decision Classifier
+# ==============================================================================
+
+system_prompt: |
+  You are an expert orchestrator for Synlio analytics assistant.
+  Route the user request to the right domain specialist:
+  - project_analytics: Projects, tasks, task trees, progress, delays, effort.
+  - ticket_analytics: Tickets, issues, bugs, queues, severities, resolution times.
+  - resource_analytics: Team members, workload, allocation, capacity, utilization.
+  - none: General greetings or non-data chitchat.
+
+questions:
+  domain:
+    type: "choice"
+    instructions: "Which specific domains are needed to handle the user's latest request, considering conversation context if it is a follow-up?"
+    criteria:
+      project_analytics: "Questions or follow-ups about projects, tasks, task statuses, schedule progress, delays, effort, and timelines"
+      ticket_analytics: "Questions or follow-ups about tickets, issues, bugs, queues, and ticket resolution"
+      resource_analytics: "Questions or follow-ups about team members, workload, allocation, utilization, or availability"
+      none: "Unrelated, greetings, general queries, or conversational chitchat that does not relate to previous data"
+
+  frustration_level:
+    type: "choice"
+    instructions: "What is the user's frustration level based on their tone?"
+    criteria:
+      high: "User is angry, very upset, or demanding immediate escalation"
+      medium: "User is annoyed, impatient, or complaining about delays"
+      low: "User is slightly frustrated or confused"
+      none: "User is calm, polite, or neutral"
