@@ -15,3 +15,4 @@ class AutomationState(TypedDict, total=False):
     warnings: List[str]
     scope: Optional[Dict[str, Any]]
     context: Optional[Dict[str, Any]]
+    attachments: Optional[List[Dict[str, Any]]]

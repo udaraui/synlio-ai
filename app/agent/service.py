@@ -255,6 +255,7 @@ class InsightAgent:
         history: Optional[list] = None,
         pending_draft: Optional[Union[dict, list]] = None,
         chat_mode: Optional[str] = "panel",
+        attachments: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """Constructs the initial AgentState dictionary from client history and current query."""
         messages = []
@@ -291,6 +292,7 @@ class InsightAgent:
             "active_workers": [agent] if agent else None,
             "error_message": None,
             "pending_draft": pending_draft,
+            "attachments": attachments,
         }
 
     async def astream_run(
@@ -308,6 +310,7 @@ class InsightAgent:
         scope: Optional[dict] = None,
         history: Optional[list] = None,
         pending_draft: Optional[Union[dict, list]] = None,
+        attachments: Optional[List[Dict[str, Any]]] = None,
     ):
         """Asynchronously streams user status messages and token-by-token responses."""
         init_telemetry()
@@ -321,7 +324,9 @@ class InsightAgent:
         formatter_started = False
 
         # Initial status marker
-        if agent and agent in DOMAIN_DISPLAY_NAMES:
+        if attachments:
+            yield "__REPLACE__Analyzing attached document..."
+        elif agent and agent in DOMAIN_DISPLAY_NAMES:
             yield f"__REPLACE__Gathering details on {DOMAIN_DISPLAY_NAMES[agent]}..."
         else:
             yield "__REPLACE__Checking what you need..."
@@ -329,7 +334,7 @@ class InsightAgent:
         # When client sends explicit history, each request is completely stateless
         thread_id = str(uuid.uuid4()) if history else (conversation_id or "default")
         config = {"configurable": {"thread_id": thread_id}}
-        input_state = self._build_input_state(query, user_id, user_email, company_id, agent, context, scope, history, pending_draft, chat_mode)
+        input_state = self._build_input_state(query, user_id, user_email, company_id, agent, context, scope, history, pending_draft, chat_mode, attachments=attachments)
 
         try:
             async for item in self.agent_executor.astream(input_state, config=config, stream_mode=["updates", "messages"]):

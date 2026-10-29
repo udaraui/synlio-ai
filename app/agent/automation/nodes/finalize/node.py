@@ -43,7 +43,7 @@ def make_finalize_node(llm):
                     clean_drafts.append(TicketDraft(**d).model_dump(exclude_none=False))
                 except Exception:
                     clean_drafts.append(d)
-            summary_text = f"I've prepared {len(clean_drafts)} tickets for you.\nPlease review the details before proceeding."
+            summary_text = f"I've prepared {len(clean_drafts)} tickets for you. Please review the details before proceeding."
             primary_draft = clean_drafts[0] if clean_drafts else {}
             elapsed = time.time() - start_time
             record_node_telemetry(
@@ -63,7 +63,7 @@ def make_finalize_node(llm):
             draft = drafts[0] if drafts else (state.get("draft") or {})
             title = draft.get("name") or "your ticket"
             space = draft.get("ticketSpaceName") or "Default Space"
-            summary_text = f"I've prepared your ticket '{title}' in the '{space}' space.\nPlease review the details before proceeding."
+            summary_text = f"I've prepared your ticket '{title}' in the '{space}' space. Please review the details before proceeding."
             try:
                 clean_draft = TicketDraft(**draft).model_dump(exclude_none=False)
             except Exception:

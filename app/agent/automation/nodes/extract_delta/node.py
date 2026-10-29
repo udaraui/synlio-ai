@@ -54,24 +54,80 @@ def make_extract_delta_node(llm):
             .replace("{timezone}", str(timezone))
         )
 
+        attachments = state.get("attachments") or []
+        doc_str = ""
+        if attachments:
+            from app.utils.document_parser import extract_text_from_attachment
+            doc_snippets = []
+            for att in attachments:
+                fname = att.get("filename") or att.get("name") or "Document"
+                content = extract_text_from_attachment(att)
+                if content:
+                    doc_snippets.append(f"=== ATTACHED DOCUMENT: {fname} ===\n{content}\n=== END OF {fname} ===")
+            if doc_snippets:
+                doc_str = "\n\n" + "\n\n".join(doc_snippets)
+
+        instruction = "Extract the updated ticket draft (or drafts if multiple items exist):"
+        if attachments:
+            instruction = (
+                "DOCUMENT TICKET EXTRACTION INSTRUCTIONS:\n"
+                "The user has uploaded one or more documents above. The document may be in ANY format (CSV, spreadsheet, table, Word doc, PDF, or text notes).\n"
+                "1. Read and analyze the entire document content carefully.\n"
+                "2. If the document is tabular or contains multiple items (such as CSV rows, task lists, or issue logs), you MUST extract EVERY SINGLE item/row as a distinct ticket draft. For example, if there are 10 items/rows, your JSON array MUST contain all 10 ticket objects!\n"
+                "3. Map fields intelligently from whatever headers, columns, or keys are used in the document:\n"
+                "   - 'name': The ticket title, summary, issue name, or task subject (MANDATORY).\n"
+                "   - 'description': Detailed context, reproduction steps, or notes.\n"
+                "   - 'assigneeName': Assigned person or owner if specified.\n"
+                "   - 'statusName': Status (e.g. Open, In Progress, Resolved) if specified.\n"
+                "   - 'severityName': Priority or severity (e.g. Low, Medium, High, Critical) if specified.\n"
+                "   - 'ticketTypeName': Type (e.g. Bug, Feature, Task) if specified or inferred.\n"
+                "4. Return ONLY a valid JSON array of ticket objects: [ { \"name\": \"...\", \"description\": \"...\", \"assigneeName\": \"...\", \"severityName\": \"...\", \"statusName\": \"...\", \"ticketTypeName\": \"...\" }, ... ]. Do NOT include conversational filler text."
+            )
+
         extracted_data = {}
         try:
             prompt_msgs = [
                 SystemMessage(content=system_content),
-                HumanMessage(content=f"Conversation:\n{chat_str}\n\nExtract the updated ticket draft:"),
+                HumanMessage(content=f"Conversation:\n{chat_str}{doc_str}\n\n{instruction}"),
             ]
             response = await llm.ainvoke(prompt_msgs)
             content = response.content.strip()
 
-            if content.startswith("```"):
-                content = content.split("```")[1]
-                if content.startswith("json"):
-                    content = content[4:].strip()
+            # Robust JSON extraction from LLM response
+            if "```" in content:
+                parts = content.split("```")
+                for part in parts:
+                    clean_part = part.strip()
+                    if clean_part.startswith("json"):
+                        clean_part = clean_part[4:].strip()
+                    if clean_part.startswith("{") or clean_part.startswith("["):
+                        try:
+                            extracted_data = json.loads(clean_part)
+                            break
+                        except Exception:
+                            pass
 
-            extracted_data = json.loads(content)
+            if not extracted_data:
+                idx_brace = content.find("{")
+                idx_bracket = content.find("[")
+                start_idx = -1
+                if idx_brace != -1 and idx_bracket != -1:
+                    start_idx = min(idx_brace, idx_bracket)
+                elif idx_brace != -1:
+                    start_idx = idx_brace
+                elif idx_bracket != -1:
+                    start_idx = idx_bracket
+
+                if start_idx != -1:
+                    try:
+                        extracted_data = json.loads(content[start_idx:].strip().rstrip("`"))
+                    except Exception:
+                        extracted_data = json.loads(content)
+                else:
+                    extracted_data = json.loads(content)
         except Exception as e:
             print(f"[WARN] extract_delta parsing error: {e}")
-            extracted_data = dict(pending_draft)
+            extracted_data = dict(pending_draft) if isinstance(pending_draft, dict) else (pending_draft or {})
 
         # Determine if extracted_data is multiple tickets or single ticket
         raw_drafts = []
@@ -126,6 +182,17 @@ def make_extract_delta_node(llm):
         all_missing_fields: List[str] = []
         needs_fields: List[Dict[str, Any]] = []
 
+        # Resolve ticket space from active page context if available
+        context_space_name = (
+            context.get("ticket_space_name")
+            or context.get("ticketSpaceName")
+            or (context.get("spaceName") if context.get("ticket_space_id") or context.get("ticketSpaceId") else None)
+        )
+        context_space_id = (
+            context.get("ticket_space_id")
+            or context.get("ticketSpaceId")
+        )
+
         for item in raw_drafts:
             if not isinstance(item, dict):
                 continue
@@ -133,7 +200,14 @@ def make_extract_delta_node(llm):
                 draft_obj = TicketDraft(**item)
                 clean = draft_obj.model_dump(exclude_none=False)
             except Exception:
-                clean = item
+                clean = dict(item)
+
+            # Auto-assign space from active page context if not already specified
+            if not clean.get("ticketSpaceName") and not clean.get("ticketSpaceId"):
+                if context_space_name:
+                    clean["ticketSpaceName"] = context_space_name
+                if context_space_id:
+                    clean["ticketSpaceId"] = context_space_id
 
             if not clean.get("name"):
                 all_missing_fields.append("name")
@@ -154,19 +228,32 @@ def make_extract_delta_node(llm):
         is_complete = len(all_missing_fields) == 0
 
         if not is_complete:
-            summary_text = (
-                "Which ticket space should I place the tickets?"
-                if len(clean_drafts) > 1
-                else "Which ticket space should I place the ticket?"
-            )
+            if "ticketSpace" in all_missing_fields:
+                summary_text = (
+                    "Which ticket space should I place the tickets?"
+                    if len(clean_drafts) > 1
+                    else "Which ticket space should I place the ticket?"
+                )
+            elif "name" in all_missing_fields:
+                summary_text = (
+                    "Please provide titles for the tickets."
+                    if len(clean_drafts) > 1
+                    else "Please provide a title for the ticket."
+                )
+            else:
+                summary_text = f"Please provide the missing information: {', '.join(all_missing_fields)}."
         else:
             if len(clean_drafts) > 1:
-                summary_text = f"I've prepared {len(clean_drafts)} ticket drafts for you.\nPlease review the details before proceeding."
+                space = clean_drafts[0].get("ticketSpaceName") if clean_drafts else None
+                if space:
+                    summary_text = f"I've prepared {len(clean_drafts)} ticket drafts for you in '{space}'. Please review the details before proceeding."
+                else:
+                    summary_text = f"I've prepared {len(clean_drafts)} ticket drafts for you. Please review the details before proceeding."
             else:
                 title = clean_drafts[0].get("name") if clean_drafts else "your ticket"
                 space = clean_drafts[0].get("ticketSpaceName") if clean_drafts else None
                 if space:
-                    summary_text = f"I've prepared your ticket '{title}' in the '{space}' space.\nPlease review the details before proceeding."
+                    summary_text = f"I've prepared your ticket '{title}' in the '{space}' space. Please review the details before proceeding."
                 else:
                     summary_text = f"Ticket draft ready for '{title}'."
 

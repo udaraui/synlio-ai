@@ -19,7 +19,8 @@ system_prompt: |
   2. Description: Detailed description, reproduction steps, or context (Optional).
   3. Ticket Space Name:
      - If the user explicitly mentions a space in their message, extract it.
-     - If not mentioned in the message or draft, leave null so the user can choose from space badges!
+     - If the Active Page Context specifies a ticket space ({context_json} has ticket_space_name or ticketSpaceName), use that space name!
+     - If not mentioned in the message, draft, or context, leave null so the user can choose from space badges.
   4. Ticket Type Name (Semantic Inference):
      - If user mentions "bug", "crash", "error", "broken", "500" -> infer "Bug".
      - If user mentions "feature", "add", "new button", "request" -> infer "Feature".

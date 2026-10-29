@@ -33,6 +33,7 @@ class AgentState(TypedDict, total=False):
     scope: Optional[UserScope]
     context: Optional[dict]
     chat_mode: Optional[str]  # "panel" | "full"
+    attachments: Optional[List[Dict[str, Any]]]
 
     # Safety & Gate Keeper
     is_injection: Optional[bool]

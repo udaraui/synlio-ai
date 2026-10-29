@@ -27,7 +27,7 @@ UNAVAILABLE_MSG = (
 
 FULL_SCREEN_AUTOMATION_MSG = (
     "Automations cannot be performed here.\n"
-    "Please navigate to the appropriate workspace page and use the Co-Pilot to proceed."
+    "Please navigate to the ypur workspace page and use the Co-Pilot to proceed."
 )
 
 TASK_AUTOMATION_MSG = (
@@ -103,6 +103,21 @@ def make_dispatcher_node(llm):
                 output_data={"intent": "automation", "reason": "pending_draft_present"},
             )
             return {"intent": "automation"}
+
+        # -------------------------------------------------------------
+        # 1b. Document Attachment Check in Side Panel
+        # -------------------------------------------------------------
+        attachments = state.get("attachments") or []
+        if attachments and chat_mode == "panel":
+            if not any(k in user_msg_clean for k in ("chart", "graph", "trend", "metric", "statistic")):
+                elapsed = time.time() - start_time
+                record_node_telemetry(
+                    node="dispatcher",
+                    latency_ms=int(elapsed * 1000),
+                    status="DOCUMENT_AUTOMATION_ROUTE",
+                    output_data={"intent": "automation", "reason": "attachment_present"},
+                )
+                return {"intent": "automation"}
 
         # -------------------------------------------------------------
         # 2. Check Feature Flag

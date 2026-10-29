@@ -34,16 +34,88 @@ GATE_KEEPER_QUESTIONS = _CONFIG.get("questions", {
 })
 
 
+ALLOWED_ATTACHMENT_EXTENSIONS = {".pdf", ".docx", ".doc", ".txt", ".csv", ".md", ".json"}
+MAX_ATTACHMENT_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
+MAX_ATTACHMENTS_COUNT = 5
+
+
 def make_gate_keeper_node(model_name: str = "meta-llama/llama-3.1-8b-instruct"):
     """
     Creates the Gatekeeper node.
-    Always runs first for 100% of turns to verify safety and prompt injection.
+    Always runs first for 100% of turns to verify safety, file constraints, and prompt injection.
     """
     async def gate_keeper_node(state: AgentState) -> Dict[str, Any]:
         start_time = time.time()
         messages = state.get("messages", [])
+        attachments = state.get("attachments") or []
 
-        # Extract current user query and conversation history
+        # -------------------------------------------------------------
+        # 1. Attachment Policy Validation (Type, Size, Count)
+        # -------------------------------------------------------------
+        if attachments:
+            if len(attachments) > MAX_ATTACHMENTS_COUNT:
+                refusal_msg = f"Too many attachments. A maximum of {MAX_ATTACHMENTS_COUNT} files is allowed."
+                elapsed = time.time() - start_time
+                record_node_telemetry(
+                    node="gate_keeper",
+                    latency_ms=int(elapsed * 1000),
+                    status="ATTACHMENT_COUNT_EXCEEDED",
+                    output_data={"isInjection": True, "safetyStatus": "COUNT_EXCEEDED", "error": refusal_msg},
+                )
+                return {
+                    "is_injection": True,
+                    "safety_status": "COUNT_EXCEEDED",
+                    "injection_score": 1.0,
+                    "messages": [AIMessage(content=refusal_msg)],
+                }
+
+            for att in attachments:
+                if not isinstance(att, dict):
+                    continue
+                fname = (att.get("filename") or att.get("name") or "").strip()
+                ext = Path(fname).suffix.lower() if fname else ""
+                if not ext or ext not in ALLOWED_ATTACHMENT_EXTENSIONS:
+                    refusal_msg = f"Attachment '{fname or 'Unnamed'}' has an unsupported file format ({ext or 'none'}). Allowed formats: PDF, DOCX, CSV, TXT, JSON, Markdown."
+                    elapsed = time.time() - start_time
+                    record_node_telemetry(
+                        node="gate_keeper",
+                        latency_ms=int(elapsed * 1000),
+                        status="UNSUPPORTED_ATTACHMENT_TYPE",
+                        output_data={"isInjection": True, "safetyStatus": "UNSUPPORTED_TYPE", "error": refusal_msg},
+                    )
+                    return {
+                        "is_injection": True,
+                        "safety_status": "UNSUPPORTED_TYPE",
+                        "injection_score": 1.0,
+                        "messages": [AIMessage(content=refusal_msg)],
+                    }
+
+                # Approximate size calculation
+                content = att.get("content") or att.get("base64") or att.get("contentText") or ""
+                size_bytes = len(content)
+                if isinstance(content, str) and (att.get("content") or att.get("base64")):
+                    # Base64 decoded byte estimate
+                    size_bytes = int(len(content) * 0.75)
+
+                if size_bytes > MAX_ATTACHMENT_SIZE_BYTES:
+                    refusal_msg = f"Attachment '{fname}' exceeds the maximum allowed file size of 10 MB."
+                    elapsed = time.time() - start_time
+                    record_node_telemetry(
+                        node="gate_keeper",
+                        latency_ms=int(elapsed * 1000),
+                        status="ATTACHMENT_TOO_LARGE",
+                        output_data={"isInjection": True, "safetyStatus": "FILE_TOO_LARGE", "error": refusal_msg},
+                    )
+                    return {
+                        "is_injection": True,
+                        "safety_status": "FILE_TOO_LARGE",
+                        "injection_score": 1.0,
+                        "messages": [AIMessage(content=refusal_msg)],
+                    }
+
+        # -------------------------------------------------------------
+        # 2. Extract User Query & Conversation History
+        # -------------------------------------------------------------
         user_query = ""
         history_msgs = []
         for msg in reversed(messages):
@@ -62,6 +134,24 @@ def make_gate_keeper_node(model_name: str = "meta-llama/llama-3.1-8b-instruct"):
             f"Latest User Message to evaluate:\n{user_query}"
             if history_str.strip() else f"User Message to evaluate:\n{user_query}"
         )
+
+        # -------------------------------------------------------------
+        # 3. Include Document Content Preview for Indirect Prompt Injection Check
+        # -------------------------------------------------------------
+        if attachments:
+            try:
+                from app.utils.document_parser import extract_text_from_attachment
+                doc_snippets = []
+                for att in attachments:
+                    fname = att.get("filename") or att.get("name") or "Document"
+                    text = extract_text_from_attachment(att)
+                    if text:
+                        preview = text[:2500].strip()
+                        doc_snippets.append(f"=== Attached Document: {fname} (Preview) ===\n{preview}\n=== End of {fname} ===")
+                if doc_snippets:
+                    state_description += "\n\nAttached Document Content to Evaluate:\n" + "\n\n".join(doc_snippets)
+            except Exception as e:
+                print(f"[WARN] Failed to extract document text for gate_keeper safety check: {e}")
 
         api_key = os.getenv("OPENROUTER_API_KEY")
         if not api_key or api_key.startswith("***"):

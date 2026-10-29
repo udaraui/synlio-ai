@@ -23,6 +23,7 @@ async def chat(
     history: Optional[list] = Body(None),
     pending_draft: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = Body(None),
     pendingDraft: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = Body(None),
+    attachments: Optional[List[Dict[str, Any]]] = Body(None),
 ):
     active_pending_draft = pending_draft or pendingDraft
     print(f"\n{'='*80}")
@@ -36,12 +37,20 @@ async def chat(
         print(f"  Preset Agent:    {agent}")
     if context:
         print(f"  Context:         {context}")
+    if attachments:
+        att_summaries = []
+        for a in attachments:
+            if isinstance(a, dict):
+                fname = a.get('filename') or a.get('name') or 'Document'
+                size_hint = f"{len(a.get('content') or a.get('contentText') or '')} chars"
+                att_summaries.append(f"{fname} ({size_hint})")
+        print(f"  Attachments ({len(attachments)}): {', '.join(att_summaries)}")
     if active_pending_draft:
         if isinstance(active_pending_draft, list):
-            names = [d.get('name', 'Untitled') for d in active_pending_draft if isinstance(d, dict)]
+            names = [str(d.get('name') or 'Untitled') for d in active_pending_draft if isinstance(d, dict)]
             print(f"  Pending Drafts ({len(active_pending_draft)}): {', '.join(names)}")
         elif isinstance(active_pending_draft, dict):
-            print(f"  Pending Draft:   {active_pending_draft.get('name', 'Untitled')}")
+            print(f"  Pending Draft:   {active_pending_draft.get('name') or 'Untitled'}")
     if history:
         print(f"  Client History:  {len(history)} messages")
     if scope:
@@ -72,6 +81,7 @@ async def chat(
                 scope=scope,
                 history=history,
                 pending_draft=active_pending_draft,
+                attachments=attachments,
             ):
                 yield chunk
         except Exception as e:
