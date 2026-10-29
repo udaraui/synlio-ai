@@ -7,6 +7,7 @@ class AutomationState(TypedDict, total=False):
     messages: Sequence[BaseMessage]
     pending_draft: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]]
     draft: Optional[Dict[str, Any]]
+    drafts: Optional[List[Dict[str, Any]]]
     missing_fields: List[str]
     needs_fields: List[Dict[str, Any]]
     is_complete: bool

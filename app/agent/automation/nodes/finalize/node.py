@@ -26,7 +26,15 @@ def make_finalize_node(llm):
     """
     async def finalize_node(state: AutomationState) -> Dict[str, Any]:
         start_time = time.time()
-        drafts = state.get("drafts") or ([state.get("draft")] if state.get("draft") else [])
+        drafts = state.get("drafts")
+        if not drafts:
+            pending = state.get("pending_draft")
+            if isinstance(pending, list) and len(pending) > 1:
+                drafts = pending
+            elif state.get("draft"):
+                drafts = [state.get("draft")]
+            else:
+                drafts = []
 
         if len(drafts) > 1:
             clean_drafts = []

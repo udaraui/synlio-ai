@@ -43,6 +43,7 @@ class AgentState(TypedDict, total=False):
     intent: Optional[str]  # "automation" | "analytics" | "general_chat"
     pending_draft: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]]
     draft: Optional[Dict[str, Any]]
+    drafts: Optional[List[Dict[str, Any]]]
     missing_fields: Optional[List[str]]
     needs_fields: Optional[List[Dict[str, Any]]]
     is_complete: Optional[bool]

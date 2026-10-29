@@ -60,6 +60,10 @@ def _resolve_status_update(node_name: str, node_output: Dict[str, Any]) -> Tuple
     elif node_name == "automation":
         draft = node_output.get("draft")
         drafts = node_output.get("drafts")
+        if not drafts:
+            pending = node_output.get("pending_draft")
+            if isinstance(pending, list) and len(pending) > 1:
+                drafts = pending
         if not drafts and draft:
             drafts = [draft]
         missing_fields = node_output.get("missing_fields") or []
