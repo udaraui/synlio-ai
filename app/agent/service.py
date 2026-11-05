@@ -17,7 +17,6 @@ from app.agent.telemetry import (
 )
 
 load_dotenv()
-api_key = os.getenv("LLM_API_KEY")
 
 # =============================================================================
 # 1. CONSTANTS & DOMAIN LABELS
@@ -228,7 +227,21 @@ def _dispatch_telemetry_payload(
 class InsightAgent:
     """Service facade managing LLM connections, LangGraph compilation, and streaming."""
 
-    def __init__(self, key: str, worker_model: Optional[str] = None, orchestrator_model: Optional[str] = None):
+    def __init__(
+        self,
+        worker_model: Optional[str] = None,
+        orchestrator_model: Optional[str] = None,
+        gamma_key: Optional[str] = None,
+        jev_key: Optional[str] = None,
+    ):
+        self.gamma_key = gamma_key or os.getenv("GAMMA_API_KEY")
+        if not self.gamma_key:
+            print("[ENV ERROR] GAMMA_API_KEY is not set in environment (.env)!")
+
+        self.jev_key = jev_key or os.getenv("JEV_API_KEY")
+        if not self.jev_key:
+            print("[ENV ERROR] JEV_API_KEY is not set in environment (.env)!")
+
         self.worker_model = worker_model or os.getenv("WORKER_MODEL")
         if not self.worker_model:
             print("[ENV ERROR] WORKER_MODEL is not set in environment (.env)!")
@@ -237,28 +250,28 @@ class InsightAgent:
         if not self.orchestrator_model:
             print("[ENV ERROR] ORCHESTRATOR_MODEL is not set in environment (.env)!")
 
-        # Worker LLM: streaming=False prevents OpenRouter SSE stream hangs on tool calling
+        # Worker LLM (Gamma): streaming=False prevents OpenRouter SSE stream hangs on tool calling
         self.worker_llm = ChatOpenAI(
             model=self.worker_model,
-            api_key=key,
+            api_key=self.gamma_key,
             temperature=0,
             base_url="https://openrouter.ai/api/v1",
             streaming=False
         )
 
-        # Formatter LLM: streaming=True enables token-by-token streaming to the UI
+        # Formatter LLM (Gamma): streaming=True enables token-by-token streaming to the UI
         self.formatter_llm = ChatOpenAI(
             model=self.worker_model,
-            api_key=key,
+            api_key=self.gamma_key,
             temperature=0,
             base_url="https://openrouter.ai/api/v1",
             streaming=True
         )
 
-        # Orchestrator LLM
+        # Orchestrator LLM (Jev Decisions)
         self.orchestrator_llm = ChatOpenAI(
             model=self.orchestrator_model,
-            api_key=key,
+            api_key=self.jev_key,
             temperature=0,
             base_url="https://openrouter.ai/api/v1",
             streaming=False
@@ -453,10 +466,18 @@ class InsightAgent:
 # =============================================================================
 
 insight_agent: Optional[InsightAgent] = None
-if api_key:
+jev_api_key = os.getenv("JEV_API_KEY")
+gamma_api_key = os.getenv("GAMMA_API_KEY")
+
+if jev_api_key and gamma_api_key:
     try:
-        insight_agent = InsightAgent(api_key)
+        insight_agent = InsightAgent(gamma_key=gamma_api_key, jev_key=jev_api_key)
     except Exception as e:
         print(f"Error initializing InsightAgent: {e}")
 else:
-    print("[ENV ERROR] LLM_API_KEY is not set in environment (.env)!")
+    missing = []
+    if not jev_api_key:
+        missing.append("JEV_API_KEY")
+    if not gamma_api_key:
+        missing.append("GAMMA_API_KEY")
+    print(f"[ENV ERROR] Required API keys missing in (.env): {', '.join(missing)}!")

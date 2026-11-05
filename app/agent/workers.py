@@ -78,9 +78,9 @@ def make_gate_keeper_node(llm: Optional[ChatOpenAI] = None):
             api_key = str(raw_key) if raw_key else None
 
         if not api_key or api_key.startswith("***"):
-            api_key = os.getenv("LLM_API_KEY")
+            api_key = os.getenv("JEV_API_KEY")
             if not api_key:
-                print("[ENV ERROR] LLM_API_KEY is not set in environment (.env)!")
+                print("[ENV ERROR] JEV_API_KEY is not set in environment (.env)!")
 
         payload = {
             "model": model_name,
@@ -227,10 +227,10 @@ def make_orchestrator_node(llm: ChatOpenAI):
                 api_key = str(raw_key) if raw_key else None
 
             if not api_key or api_key.startswith("***"):
-                api_key = os.getenv("LLM_API_KEY")
+                api_key = os.getenv("JEV_API_KEY")
 
             if not api_key:
-                print("WARNING: LLM_API_KEY is not set.")
+                print("WARNING: JEV_API_KEY is not set.")
             
             # OpenRouter requires hitting /api/alpha/decisions for jev-1.14
             payload = {

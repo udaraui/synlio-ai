@@ -19,9 +19,9 @@ from app.agent.graph import create_graph
 
 def main():
     print("Compiling LangGraph state graph...")
-    api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENROUTER_API_KEY")
+    api_key = os.getenv("GAMMA_API_KEY") or os.getenv("JEV_API_KEY")
     if not api_key:
-        print("[ENV ERROR] LLM_API_KEY is not set in environment (.env)!")
+        print("[ENV ERROR] Neither GAMMA_API_KEY nor JEV_API_KEY is set in environment (.env)!")
     dummy_llm = ChatOpenAI(model="gemini-2.0-flash-001", api_key=api_key or "missing_key")
     compiled_graph = create_graph(dummy_llm)
     graph = compiled_graph.get_graph()

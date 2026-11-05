@@ -153,9 +153,7 @@ def make_gate_keeper_node(model_name: str = "meta-llama/llama-3.1-8b-instruct"):
             except Exception as e:
                 print(f"[WARN] Failed to extract document text for gate_keeper safety check: {e}")
 
-        api_key = os.getenv("OPENROUTER_API_KEY")
-        if not api_key or api_key.startswith("***"):
-            api_key = os.getenv("LLM_API_KEY")
+        api_key = os.getenv("JEV_API_KEY")
 
         payload = {
             "model": model_name,

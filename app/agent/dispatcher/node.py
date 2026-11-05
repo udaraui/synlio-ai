@@ -168,7 +168,7 @@ def make_dispatcher_node(llm):
                 else:
                     api_key = str(raw_key) if raw_key else None
                 if not api_key or api_key.startswith("***"):
-                    api_key = os.getenv("LLM_API_KEY")
+                    api_key = os.getenv("JEV_API_KEY")
 
                 payload = {
                     "model": model_name,
