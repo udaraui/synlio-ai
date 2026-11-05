@@ -16,3 +16,6 @@ class AutomationState(TypedDict, total=False):
     scope: Optional[Dict[str, Any]]
     context: Optional[Dict[str, Any]]
     attachments: Optional[List[Dict[str, Any]]]
+    mutation_payload: Optional[Dict[str, Any]]
+    automation_action: Optional[str]
+

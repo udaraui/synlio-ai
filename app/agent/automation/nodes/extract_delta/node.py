@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import json
 import yaml
@@ -35,10 +36,22 @@ def make_extract_delta_node(llm):
 
         # Conversation history for delta understanding
         recent_chat = []
+        user_msg = ""
+        for msg in reversed(messages):
+            if not user_msg and (isinstance(msg, HumanMessage) or getattr(msg, "type", "") in ("human", "user")):
+                user_msg = str(getattr(msg, "content", msg))
         for msg in messages[-6:]:
             role = "User" if isinstance(msg, HumanMessage) else "Assistant"
             recent_chat.append(f"{role}: {msg.content}")
         chat_str = "\n".join(recent_chat)
+
+        # Detect cloning / duplicating existing ticket code (e.g. "create a ticket same as PTS-11")
+        clone_match = re.search(
+            r'\b(?:same\s+as|clone|duplicate|copy\s+of|based\s+on|like)\s+([A-Za-z]{2,10}-\d+)\b',
+            f"{user_msg} {chat_str}",
+            re.IGNORECASE,
+        )
+        source_code = clone_match.group(1).upper() if clone_match else None
 
         allowed_spaces = scope.get("allowed_spaces") or []
         current_date = context.get("currentDate") or datetime.utcnow().strftime("%Y-%m-%d")
@@ -196,11 +209,24 @@ def make_extract_delta_node(llm):
         for item in raw_drafts:
             if not isinstance(item, dict):
                 continue
+
+            if source_code and not item.get("sourceTicketCode"):
+                item["sourceTicketCode"] = source_code
+
+            # If user asks to clone or copy without a title, assign a placeholder that backend will update to source ticket name
+            if source_code:
+                current_name = str(item.get("name") or "").strip().lower()
+                if not current_name or any(current_name.startswith(p) for p in ["same as", "clone", "copy of", "duplicate", "like"]):
+                    item["name"] = f"{source_code} (clone)"
+
             try:
                 draft_obj = TicketDraft(**item)
                 clean = draft_obj.model_dump(exclude_none=False)
             except Exception:
                 clean = dict(item)
+
+            if source_code and not clean.get("sourceTicketCode"):
+                clean["sourceTicketCode"] = source_code
 
             # Auto-assign space from active page context if not already specified
             if not clean.get("ticketSpaceName") and not clean.get("ticketSpaceId"):
@@ -209,10 +235,12 @@ def make_extract_delta_node(llm):
                 if context_space_id:
                     clean["ticketSpaceId"] = context_space_id
 
-            if not clean.get("name"):
+            # Only require name if not cloning from an existing ticket
+            if not clean.get("name") and not clean.get("sourceTicketCode"):
                 all_missing_fields.append("name")
 
-            if not clean.get("ticketSpaceName") and not clean.get("ticketSpaceId"):
+            # Only require space if not specified and not cloning (since space can be inherited from source ticket)
+            if not clean.get("ticketSpaceName") and not clean.get("ticketSpaceId") and not clean.get("sourceTicketCode"):
                 if "ticketSpace" not in all_missing_fields:
                     all_missing_fields.append("ticketSpace")
 
@@ -243,7 +271,9 @@ def make_extract_delta_node(llm):
             else:
                 summary_text = f"Please provide the missing information: {', '.join(all_missing_fields)}."
         else:
-            if len(clean_drafts) > 1:
+            if source_code:
+                summary_text = f"I've prepared a new ticket draft based on **{source_code}**. Please review the details before proceeding."
+            elif len(clean_drafts) > 1:
                 space = clean_drafts[0].get("ticketSpaceName") if clean_drafts else None
                 if space:
                     summary_text = f"I've prepared {len(clean_drafts)} ticket drafts for you in '{space}'. Please review the details before proceeding."

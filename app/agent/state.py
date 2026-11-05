@@ -51,6 +51,8 @@ class AgentState(TypedDict, total=False):
     automation_summary: Optional[str]
     summary: Optional[str]
     warnings: Optional[List[str]]
+    mutation_payload: Optional[Dict[str, Any]]
+    automation_action: Optional[str]
 
     # Sentiment & Tone
     frustration_level: Optional[str]

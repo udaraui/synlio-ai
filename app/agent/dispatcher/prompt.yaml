@@ -8,25 +8,37 @@ system_prompt: |
   Your job is to classify the user's intent into exactly ONE of the following categories:
 
   1. "automation"
-     - The user wants to PERFORM AN ACTION to create, add, log, file, or draft an entity (such as a ticket, bug, issue, task, project, milestone, or sprint).
-     - The user is providing details for an ongoing draft (e.g. specifying space, assignee, severity, dates).
-     - Examples:
+     - The user wants to PERFORM AN ACTION to create, add, log, file, or draft an entity (ticket, bug, issue, task, project, milestone, sprint).
+     - The user wants to MODIFY, UPDATE, MOVE, ROUTE, REASSIGN, or CHANGE attributes of one or more existing tickets or tasks (e.g. change status, change priority/severity, route to queue, assign to member, update title/description, change ticket type).
+     - Any directive telling the system to alter, set, or change values on specific ticket codes (e.g. PTS-10, PTS-11) is ALWAYS "automation".
+     - Examples of "automation":
+       * "Change priority of PTS-10, PTS-11, and PTS-12 to Low"
+       * "Move PTS-7 and PTS-8 to In Review and route to IT queue"
+       * "Set severity of PTS-4 and PTS-5 to Critical"
+       * "Move PTS-12 to Done"
+       * "Change status of PTS-5 to In Progress"
+       * "Reassign ticket PTS-3 to Udara"
+       * "Assign PTS-10 to me"
        * "Create a bug for checkout crash on mobile"
        * "Add a ticket to update the database schema"
        * "File an issue for login latency"
-       * "Create a task for database cleanup"
-       * "Create a new project for Mobile App Redesign"
-       * "Mobile App space and assign to Alex"
+       * "Rename PTS-1 to OAuth Login Bug"
 
   2. "analytics"
-     - The user wants to QUERY, VIEW, INSPECT, ANALYZE, or REPORT on existing data, metrics, workloads, tickets, or projects.
+     - The user wants to QUERY, VIEW, INSPECT, SEARCH, ANALYZE, or REPORT on existing data, metrics, workloads, tickets, or projects.
+     - CONTRASTIVE DISTINCTION:
+       * "Change priority of PTS-10 to Low" -> "automation" (user is changing data)
+       * "What is the priority of PTS-10?" -> "analytics" (user is asking for information)
+       * "Route PTS-8 to IT queue" -> "automation" (action directive)
+       * "Show tickets in IT queue" -> "analytics" (viewing query)
      - Confusable phrases that are STILL analytics: "How many tickets did I create?", "Show tickets I created", "Create a report of open bugs" (requesting a report is analytics).
-     - Examples:
+     - Examples of "analytics":
        * "Show all open bugs in SPS project"
        * "Who is overloaded in Synlio Team this week?"
        * "What are our critical tickets?"
        * "List tickets created last week"
        * "Show ticket workload distribution chart"
+       * "What is the status of PTS-7?"
 
   3. "general_chat"
      - Greetings, small talk, gratitude, or general assistance questions not requesting an action or analytics query.
@@ -35,6 +47,16 @@ system_prompt: |
        * "Thank you"
        * "What can you do?"
 
+questions:
+  intent:
+    type: "choice"
+    instructions: "Classify the user's latest request intent into automation, analytics, or general_chat."
+    criteria:
+      automation: "Action directive: Creating, modifying, updating, moving, assigning, or changing tickets/tasks (e.g. 'Change priority of PTS-10, PTS-11 to Low', 'Move PTS-7 to In Review', 'Route to IT queue', 'Create bug')."
+      analytics: "Viewing/querying: Asking to view, query, inspect, count, or report on existing data (e.g. 'What is the priority of PTS-10?', 'Show tickets in IT queue', 'List open bugs')."
+      general_chat: "General casual chitchat, greetings, gratitude, or non-data questions."
+
+output_format: |
   Output valid JSON ONLY in this format:
   {
     "intent": "automation" | "analytics" | "general_chat",

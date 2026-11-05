@@ -58,6 +58,25 @@ def _resolve_status_update(node_name: str, node_output: Dict[str, Any]) -> Tuple
         return "__REPLACE__Analyzing workspace data...", None
 
     elif node_name == "automation":
+        mutation_payload = node_output.get("mutation_payload")
+        if not mutation_payload and node_output.get("automation_action") == "UPDATE_TICKET":
+            mutation_payload = {
+                "action": "UPDATE_TICKET",
+                "status": "READY" if node_output.get("targets") else "NEEDS_INPUT",
+                "targets": node_output.get("targets") or [],
+                "changes": node_output.get("changes") or {},
+                "summary": node_output.get("automation_summary") or node_output.get("summary") or "Ticket updated.",
+            }
+
+        if mutation_payload:
+            summary = (
+                node_output.get("automation_summary")
+                or node_output.get("summary")
+                or mutation_payload.get("summary")
+                or "Ticket updated."
+            )
+            return None, f"{summary}\n\n__MUTATION_PAYLOAD__{json.dumps(mutation_payload)}"
+
         draft = node_output.get("draft")
         drafts = node_output.get("drafts")
         if not drafts:
@@ -142,6 +161,17 @@ def _dispatch_telemetry_payload(
         status = "INJECTION_BLOCKED"
     elif node_usage.get("orchestrator", {}).get("status") == "NO_DOMAIN_FALLBACK":
         status = "NO_DOMAIN_FALLBACK"
+    elif any(n.get("status") == "ERROR" for n in node_usage.values()):
+        status = "ERROR"
+    elif any(n.get("status") == "FALLBACK" for n in node_usage.values()):
+        status = "FALLBACK"
+
+    # Find first error message if any
+    node_error_msg = None
+    for n in node_usage.values():
+        if n.get("errorMessage"):
+            node_error_msg = n.get("errorMessage")
+            break
 
     # Classify requestType based on executed nodes
     request_type = "analytics"
@@ -170,7 +200,7 @@ def _dispatch_telemetry_payload(
         "cacheToken": cache_tokens,
         "totalTokens": total_tokens or (in_tokens + out_tokens),
         "nodeWiseUsage": node_usage,
-        "errorMessage": None,
+        "errorMessage": node_error_msg,
     }
 
     # If human inner loop is needed (e.g. incomplete ticket draft awaiting user action), do not create an AI log

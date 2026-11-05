@@ -1,7 +1,9 @@
 import os
+import re
 import time
 import json
 import yaml
+import httpx
 from pathlib import Path
 from typing import Dict, Any
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
@@ -17,6 +19,7 @@ except Exception as e:
     _CONFIG = {}
 
 DISPATCHER_SYSTEM_PROMPT = _CONFIG.get("system_prompt", "Classify intent as 'automation', 'analytics', or 'general_chat'.")
+DISPATCHER_QUESTIONS = _CONFIG.get("questions", {})
 
 CANCEL_KEYWORDS = {"cancel", "never mind", "nevermind", "forget it", "stop", "discard"}
 
@@ -95,6 +98,30 @@ def make_dispatcher_node(llm):
                     "messages": [AIMessage(content="I've cancelled that draft. What else can I help you with?")],
                 }
 
+            # If user message contains explicit mutation actions WITH a ticket code, or explicit move/status verbs, override pending_draft
+            has_explicit_ticket_code = bool(re.search(r'\b[A-Za-z]{2,10}-\d+\b', user_msg))
+            is_mutation_override = has_explicit_ticket_code or any(
+                v in user_msg_clean
+                for v in (
+                    "move ticket", "change status", "update status", "update ticket", "close ticket", "reopen ticket"
+                )
+            )
+
+            if is_mutation_override:
+                elapsed = time.time() - start_time
+                record_node_telemetry(
+                    node="dispatcher",
+                    latency_ms=int(elapsed * 1000),
+                    status="MUTATION_OVERRIDE",
+                    output_data={"intent": "automation", "reason": "mutation_overrides_pending_draft"},
+                )
+                return {
+                    "intent": "automation",
+                    "pending_draft": None,
+                    "draft": None,
+                    "needs_fields": None,
+                }
+
             elapsed = time.time() - start_time
             record_node_telemetry(
                 node="dispatcher",
@@ -127,31 +154,70 @@ def make_dispatcher_node(llm):
             return {"intent": "analytics"}
 
         # -------------------------------------------------------------
-        # 3. Categorical Intent Classification via LLM
+        # 3. Categorical Intent Classification via LLM (Jev Decisions or Chat)
         # -------------------------------------------------------------
         intent = "analytics"
+        model_name = getattr(llm, "model_name", None) or os.getenv("ORCHESTRATOR_MODEL", "typesafe/jev-1.14")
+        is_decisions_model = "jev" in model_name.lower() or "decisions" in model_name.lower()
+
         try:
-            prompt_msgs = [
-                SystemMessage(content=DISPATCHER_SYSTEM_PROMPT),
-                HumanMessage(content=f"Classify this request:\n\"{user_msg}\""),
-            ]
-            response = await llm.ainvoke(prompt_msgs)
-            content = response.content.strip()
+            if is_decisions_model and DISPATCHER_QUESTIONS:
+                raw_key = getattr(llm, "openai_api_key", None)
+                if hasattr(raw_key, "get_secret_value"):
+                    api_key = raw_key.get_secret_value()
+                else:
+                    api_key = str(raw_key) if raw_key else None
+                if not api_key or api_key.startswith("***"):
+                    api_key = os.getenv("LLM_API_KEY")
 
-            # Clean JSON markdown if wrapped
-            if content.startswith("```"):
-                content = content.split("```")[1]
-                if content.startswith("json"):
-                    content = content[4:].strip()
+                payload = {
+                    "model": model_name,
+                    "state": f"User: {user_msg}\n",
+                    "questions": DISPATCHER_QUESTIONS,
+                }
+                async with httpx.AsyncClient() as client:
+                    resp = await client.post(
+                        "https://openrouter.ai/api/alpha/decisions",
+                        headers={
+                            "Authorization": f"Bearer {api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json=payload,
+                        timeout=15.0,
+                    )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    decision = data.get("answers", {}).get("intent", {}).get("choice")
+                    if decision in ("automation", "analytics", "general_chat"):
+                        intent = decision
+                else:
+                    raise Exception(f"Decisions API returned status {resp.status_code}: {resp.text}")
+            else:
+                prompt_msgs = [
+                    SystemMessage(content=DISPATCHER_SYSTEM_PROMPT),
+                    HumanMessage(content=f"Classify this request:\n\"{user_msg}\""),
+                ]
+                response = await llm.ainvoke(prompt_msgs)
+                content = response.content.strip()
 
-            parsed = json.loads(content)
-            intent = parsed.get("intent", "analytics").lower()
-            if intent not in ("automation", "analytics", "general_chat"):
-                intent = "analytics"
+                # Clean JSON markdown if wrapped
+                if content.startswith("```"):
+                    content = content.split("```")[1]
+                    if content.startswith("json"):
+                        content = content[4:].strip()
+
+                parsed = json.loads(content)
+                intent = parsed.get("intent", "analytics").lower()
+                if intent not in ("automation", "analytics", "general_chat"):
+                    intent = "analytics"
 
         except Exception as e:
-            # Fallback heuristic: check for action verbs
-            action_verbs = ("create", "add", "make", "draft", "file a bug", "new ticket", "open a ticket", "new task")
+            # Fallback heuristic if LLM call encounters network/API error
+            action_verbs = (
+                "create", "add", "make", "draft", "file", "log", "new ticket", "open a ticket", "new task",
+                "move", "change", "update", "assign", "reassign", "set", "rename", "mark", "close", "reopen",
+                "priority", "severity", "status", "queue"
+            )
             if any(v in user_msg_clean for v in action_verbs) and "report" not in user_msg_clean:
                 intent = "automation"
             else:

@@ -63,7 +63,11 @@ def make_finalize_node(llm):
             draft = drafts[0] if drafts else (state.get("draft") or {})
             title = draft.get("name") or "your ticket"
             space = draft.get("ticketSpaceName") or "Default Space"
-            summary_text = f"I've prepared your ticket '{title}' in the '{space}' space. Please review the details before proceeding."
+            source_code = draft.get("sourceTicketCode")
+            if source_code:
+                summary_text = f"I've prepared a new ticket draft based on **{source_code}**. Please review the details before proceeding."
+            else:
+                summary_text = f"I've prepared your ticket '{title}' in the '{space}' space. Please review the details before proceeding."
             try:
                 clean_draft = TicketDraft(**draft).model_dump(exclude_none=False)
             except Exception:
