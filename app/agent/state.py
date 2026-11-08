@@ -27,6 +27,7 @@ class AgentState(TypedDict, total=False):
     needs_retry: Optional[bool]
 
     # Context & Access Scope
+    agent: Optional[str]
     user_id: Optional[int]
     user_email: Optional[str]
     company_id: Optional[int]

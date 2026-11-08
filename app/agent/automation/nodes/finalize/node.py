@@ -36,14 +36,36 @@ def make_finalize_node(llm):
             else:
                 drafts = []
 
+        agent = state.get("agent") or (state.get("active_workers")[0] if state.get("active_workers") else None)
+        is_ticket_agent = agent in ("ticket_analytics", "ticket")
+        is_task_agent = agent in ("project_analytics", "task", "project")
+
+        if is_ticket_agent:
+            is_task = False
+        elif is_task_agent:
+            is_task = True
+        else:
+            is_task = (
+                state.get("entity_type") == "task"
+                or state.get("automation_action") == "CREATE_TASK"
+                or any(isinstance(d, dict) and d.get("entityType") == "task" for d in drafts)
+            )
+
         if len(drafts) > 1:
             clean_drafts = []
             for d in drafts:
-                try:
-                    clean_drafts.append(TicketDraft(**d).model_dump(exclude_none=False))
-                except Exception:
-                    clean_drafts.append(d)
-            summary_text = f"I've prepared {len(clean_drafts)} tickets for you. Please review the details before proceeding."
+                if is_task:
+                    item = dict(d)
+                    item["entityType"] = "task"
+                    clean_drafts.append(item)
+                else:
+                    try:
+                        clean_drafts.append(TicketDraft(**d).model_dump(exclude_none=False))
+                    except Exception:
+                        clean_drafts.append(d)
+
+            entity_word = "tasks" if is_task else "tickets"
+            summary_text = f"I've prepared {len(clean_drafts)} {entity_word} for you. Please review the details before proceeding."
             primary_draft = clean_drafts[0] if clean_drafts else {}
             elapsed = time.time() - start_time
             record_node_telemetry(
@@ -57,21 +79,35 @@ def make_finalize_node(llm):
                 "drafts": clean_drafts,
                 "summary": summary_text,
                 "automation_summary": summary_text,
+                "entity_type": "task" if is_task else "ticket",
+                "automation_action": "CREATE_TASK" if is_task else "CREATE_TICKET",
                 "messages": [AIMessage(content=summary_text)],
             }
         else:
             draft = drafts[0] if drafts else (state.get("draft") or {})
-            title = draft.get("name") or "your ticket"
-            space = draft.get("ticketSpaceName") or "Default Space"
+            title = draft.get("name") or ("your task" if is_task else "your ticket")
+            space = draft.get("taskSpaceName") if is_task else (draft.get("ticketSpaceName") or "Default Space")
             source_code = draft.get("sourceTicketCode")
-            if source_code:
+
+            if is_task:
+                clean_draft = dict(draft)
+                clean_draft["entityType"] = "task"
+                if space:
+                    summary_text = f"I've prepared your task draft '{title}' in '{space}'. Please review the details before proceeding."
+                else:
+                    summary_text = f"I've prepared your task draft '{title}'. Please review the details before proceeding."
+            elif source_code:
                 summary_text = f"I've prepared a new ticket draft based on **{source_code}**. Please review the details before proceeding."
+                try:
+                    clean_draft = TicketDraft(**draft).model_dump(exclude_none=False)
+                except Exception:
+                    clean_draft = draft
             else:
                 summary_text = f"I've prepared your ticket '{title}' in the '{space}' space. Please review the details before proceeding."
-            try:
-                clean_draft = TicketDraft(**draft).model_dump(exclude_none=False)
-            except Exception:
-                clean_draft = draft
+                try:
+                    clean_draft = TicketDraft(**draft).model_dump(exclude_none=False)
+                except Exception:
+                    clean_draft = draft
 
             elapsed = time.time() - start_time
             record_node_telemetry(
@@ -86,6 +122,8 @@ def make_finalize_node(llm):
                 "drafts": [clean_draft],
                 "summary": summary_text,
                 "automation_summary": summary_text,
+                "entity_type": "task" if is_task else "ticket",
+                "automation_action": "CREATE_TASK" if is_task else "CREATE_TICKET",
                 "messages": [AIMessage(content=summary_text)],
             }
 

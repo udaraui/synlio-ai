@@ -23,6 +23,27 @@ class TicketDraft(BaseModel):
     impactId: Optional[int] = Field(None, description="Resolved ID of the impact")
     sourceTicketCode: Optional[str] = Field(None, description="Source ticket code to clone or copy from (e.g. PTS-11)")
 
+class TaskDraft(BaseModel):
+    """Structured draft of a task aligned 1:1 with CreateTaskDto."""
+    name: Optional[str] = Field(None, description="The name / title of the task")
+    description: Optional[str] = Field(None, description="Detailed description of the task")
+    taskSpaceName: Optional[str] = Field(None, description="Name of the target task space")
+    taskSpaceId: Optional[int] = Field(None, description="Resolved ID of the task space")
+    parentTaskId: Optional[int] = Field(None, description="Parent task ID if nested inside a project/task")
+    parentTaskName: Optional[str] = Field(None, description="Name or code of the parent task")
+    hierarchyLevelConfigId: Optional[int] = Field(None, description="Resolved hierarchy level config ID")
+    hierarchyLevelName: Optional[str] = Field(None, description="Hierarchy level name, e.g. Project, Initiative, Task, Milestone")
+    hierarchyLevelSequence: Optional[int] = Field(None, description="Sequence: 1 for root project/initiative, 2 for task, etc.")
+    statusName: Optional[str] = Field(None, description="Status name, e.g. Open, To Do, In Progress")
+    statusId: Optional[int] = Field(None, description="Resolved ID of the status")
+    severityName: Optional[str] = Field(None, description="Severity / Priority: Critical, High, Medium, Low")
+    severityId: Optional[int] = Field(None, description="Resolved ID of the severity")
+    assigneeName: Optional[str] = Field(None, description="Name of the assigned resource")
+    assigneeId: Optional[int] = Field(None, description="Resolved ID of the resource")
+    startDate: Optional[str] = Field(None, description="Start date (YYYY-MM-DD)")
+    dueDate: Optional[str] = Field(None, description="Due date (YYYY-MM-DD)")
+    estimateEffort: Optional[float] = Field(None, description="Estimated effort in hours")
+
 class NeedsFieldOption(BaseModel):
     id: Optional[int] = None
     name: str
@@ -34,10 +55,12 @@ class NeedsField(BaseModel):
     options: List[NeedsFieldOption] = []
 
 class AutomationDraftPayload(BaseModel):
-    action: str = "CREATE_TICKET"
+    action: str = "CREATE_TICKET"  # "CREATE_TICKET" or "CREATE_TASK"
+    entityType: str = "ticket"     # "ticket" or "task"
     status: str = "DRAFT"
     summary: str
-    draft: TicketDraft
+    draft: Optional[Dict[str, Any]] = None
+    drafts: List[Dict[str, Any]] = []
     warnings: List[str] = []
     needs: List[NeedsField] = []
 
@@ -51,6 +74,16 @@ class TicketMutationChanges(BaseModel):
     queueName: Optional[str] = Field(None, description="Target queue/department")
     completionDate: Optional[str] = Field(None, description="Target due date (ISO string YYYY-MM-DD)")
     plannedEffort: Optional[float] = Field(None, description="Target effort in hours")
+
+class TaskMutationChanges(BaseModel):
+    name: Optional[str] = Field(None, description="New task title")
+    description: Optional[str] = Field(None, description="New task description")
+    statusName: Optional[str] = Field(None, description="Target status name (e.g. Done, In Progress)")
+    severityName: Optional[str] = Field(None, description="Target severity (e.g. Critical, High, Medium, Low)")
+    assigneeName: Optional[str] = Field(None, description="Target resource name (e.g. Udara, Me, Unassigned)")
+    startDate: Optional[str] = Field(None, description="Target start date (ISO string YYYY-MM-DD)")
+    dueDate: Optional[str] = Field(None, description="Target due date (ISO string YYYY-MM-DD)")
+    estimateEffort: Optional[float] = Field(None, description="Target estimate effort in hours")
 
 class TicketMutationFilter(BaseModel):
     assignee: Optional[str] = Field(None, description="Assignee filter name, e.g. Reshan, me")
@@ -66,12 +99,13 @@ class MutationOption(BaseModel):
     actionText: str
 
 class MutationPayload(BaseModel):
-    action: str = "UPDATE_TICKET"  # or "UPDATE_TASK"
+    action: str = "UPDATE_TICKET"  # "UPDATE_TICKET" or "UPDATE_TASK"
     entityType: str = "ticket"     # "ticket" | "task"
     status: str = "READY"          # "READY" | "NEEDS_INPUT"
-    targets: List[str] = Field(default_factory=list, description="Target ticket codes or IDs, e.g. ['PTS-12']")
-    filter: Optional[TicketMutationFilter] = None
-    changes: TicketMutationChanges = Field(default_factory=TicketMutationChanges)
+    targets: List[str] = Field(default_factory=list, description="Target ticket or task codes, e.g. ['PTS-12'] or ['PRJ-10']")
+    filter: Optional[Dict[str, Any]] = None
+    changes: Dict[str, Any] = Field(default_factory=dict)
     options: List[MutationOption] = Field(default_factory=list)
     summary: str = Field("", description="Conversational explanation of changes")
     warnings: List[str] = Field(default_factory=list)
+    attemptedHierarchyChange: bool = Field(False, description="Flagged if user tried to alter task hierarchy level")

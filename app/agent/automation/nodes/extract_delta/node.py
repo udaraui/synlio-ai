@@ -156,97 +156,298 @@ def make_extract_delta_node(llm):
         else:
             raw_drafts = [dict(pending_draft)] if (pending_draft and isinstance(pending_draft, dict)) else []
 
+        # Check domain from agent preset, pending draft, context, or message
+        agent = state.get("agent") or (state.get("active_workers")[0] if state.get("active_workers") else None)
+        is_ticket_agent = agent in ("ticket_analytics", "ticket")
+        is_task_agent = agent in ("project_analytics", "task", "project")
+        pending_list = pending_draft if isinstance(pending_draft, list) else ([pending_draft] if isinstance(pending_draft, dict) else [])
+        has_task_in_pending = any(
+            isinstance(item, dict) and (
+                item.get("entityType") == "task" or
+                item.get("parentTaskId") or
+                item.get("parentTaskName") or
+                item.get("hierarchyLevelSequence")
+            )
+            for item in pending_list
+        )
+
+        user_msg_clean = user_msg.strip().lower()
+        matched_space = next(
+            (s for s in allowed_spaces if isinstance(s, dict) and s.get("name", "").strip().lower() == user_msg_clean),
+            None
+        )
+
+        # Code syntax distinction:
+        # Ticket code: Prefix followed by hyphen and ONLY digits (e.g. PTS-23, SYN-104)
+        # Task code: Prefix followed by hyphen and starts with an English letter (e.g. PTS-P2, PTS-P8, PTS-T1)
+        has_task_code = bool(re.search(r'\b[A-Za-z0-9]+-[A-Za-z]+[A-Za-z0-9_-]*\b', user_msg))
+        has_ticket_code = bool(re.search(r'\b[A-Za-z0-9]+-\d+\b', user_msg))
+
         # If there's an existing single pending_draft and extracted single draft, merge deltas
-        if len(raw_drafts) == 1 and pending_draft and isinstance(pending_draft, dict) and "name" in pending_draft:
-            merged = dict(pending_draft)
+        if len(pending_list) == 1 and len(raw_drafts) == 1 and isinstance(pending_list[0], dict) and "name" in pending_list[0]:
+            merged = dict(pending_list[0])
             for k, v in raw_drafts[0].items():
                 if v is not None:
+                    # Never overwrite task entityType with ticket
+                    if k == "entityType" and merged.get("entityType") == "task":
+                        continue
+                    # Never overwrite task title with the parent option name/code selected by the user
+                    if k == "name" and (code_match or ":" in user_msg_clean or user_msg_clean.upper() in str(v).upper()):
+                        continue
                     merged[k] = v
+            # If pending_list[0] already had parentTask info (e.g. populated when clicking option badge), preserve it!
+            if pending_list[0].get("parentTaskId") and not merged.get("parentTaskId"):
+                merged["parentTaskId"] = pending_list[0]["parentTaskId"]
+            if pending_list[0].get("parentTaskName") and not merged.get("parentTaskName"):
+                merged["parentTaskName"] = pending_list[0]["parentTaskName"]
+            if pending_list[0].get("parentTaskCode") and not merged.get("parentTaskCode"):
+                merged["parentTaskCode"] = pending_list[0]["parentTaskCode"]
+            if pending_list[0].get("hierarchyLevelSequence") and not merged.get("hierarchyLevelSequence"):
+                merged["hierarchyLevelSequence"] = pending_list[0]["hierarchyLevelSequence"]
             raw_drafts = [merged]
-        # If pending_draft was already a list of multiple tickets:
-        elif isinstance(pending_draft, list) and len(pending_draft) > 1:
+        # If pending_draft was already a list of multiple items:
+        elif len(pending_list) > 1:
             if len(raw_drafts) == 1:
-                # LLM returned a common update (e.g. ticket space or priority) for the batch
+                # LLM returned a common update (e.g. space name or priority) for the batch
                 single_delta = raw_drafts[0]
                 updated_list = []
-                for existing in pending_draft:
+                for existing in pending_list:
                     merged = dict(existing)
                     for k, v in single_delta.items():
                         if v is not None:
-                            # Keep each ticket's distinct name & description
+                            # Keep each item's distinct name & description
                             if k in ("name", "description") and existing.get(k):
                                 continue
                             if k == "assigneeName" and existing.get("assigneeName") and existing.get("assigneeName") != "me":
                                 continue
+                            if k == "entityType" and existing.get("entityType") == "task":
+                                continue
                             merged[k] = v
                     updated_list.append(merged)
                 raw_drafts = updated_list
-            elif len(raw_drafts) == len(pending_draft):
+            elif len(raw_drafts) == len(pending_list):
                 updated_list = []
-                for i, existing in enumerate(pending_draft):
+                for i, existing in enumerate(pending_list):
                     merged = dict(existing)
                     for k, v in raw_drafts[i].items():
                         if v is not None:
+                            if k == "entityType" and existing.get("entityType") == "task":
+                                continue
+                            if k in ("name", "description") and existing.get(k):
+                                continue
                             merged[k] = v
+                    # Preserve parent relations from pending_draft if not updated
+                    if existing.get("name"):
+                        merged["name"] = existing["name"]
+                    if existing.get("parentTaskId") and not merged.get("parentTaskId"):
+                        merged["parentTaskId"] = existing["parentTaskId"]
+                    if existing.get("parentTaskName") and not merged.get("parentTaskName"):
+                        merged["parentTaskName"] = existing["parentTaskName"]
+                    if existing.get("parentTaskCode") and not merged.get("parentTaskCode"):
+                        merged["parentTaskCode"] = existing["parentTaskCode"]
+                    if existing.get("isCreateNewLevel1"):
+                        merged["isCreateNewLevel1"] = True
+                        merged["hierarchyLevelSequence"] = 1
                     updated_list.append(merged)
                 raw_drafts = updated_list
+
+        user_msg_lower = user_msg.lower()
+        user_msg_clean = user_msg.strip()
+        code_match = re.search(r'\b([A-Za-z0-9_-]+-P\d+)\b', user_msg, re.IGNORECASE)
+        is_create_as_new = any(p in user_msg_lower for p in ["create as new", "new project", "as a new project", "create new project"])
+
+        if is_create_as_new and raw_drafts:
+            raw_drafts[0]["hierarchyLevelSequence"] = 0
+            raw_drafts[0]["parentTaskId"] = None
+            raw_drafts[0]["parentTaskName"] = None
+            raw_drafts[0]["isCreateNewLevel1"] = True
+        elif (code_match or ":" in user_msg_clean) and raw_drafts:
+            if not raw_drafts[0].get("parentTaskId") and not raw_drafts[0].get("parentTaskName"):
+                raw_drafts[0]["parentTaskName"] = user_msg_clean
+                raw_drafts[0]["hierarchyLevelSequence"] = 2
+        has_task_words = any(w in user_msg_lower for w in ["task", "subtask", "sub-task", "project", "initiative", "folder", "milestone"])
+        has_ticket_words = any(k in user_msg_lower for k in ["ticket", "bug", "issue"])
+
+        # Resolve space from active page context if available
+        context_ticket_space_name = (
+            context.get("ticket_space_name")
+            or context.get("ticketSpaceName")
+            or (context.get("spaceName") if context.get("ticket_space_id") or context.get("ticketSpaceId") else None)
+        )
+        context_ticket_space_id = (
+            context.get("ticket_space_id")
+            or context.get("ticketSpaceId")
+        )
+
+        context_task_space_name = (
+            context.get("task_space_name")
+            or context.get("taskSpaceName")
+            or (context.get("spaceName") if context.get("task_space_id") or context.get("taskSpaceId") else None)
+        )
+        context_task_space_id = (
+            context.get("task_space_id")
+            or context.get("taskSpaceId")
+        )
+
+        # Determine domain authority:
+        if is_ticket_agent:
+            # Strictly ticket domain unless user explicitly targeted a task code
+            is_task_domain = has_task_code and not has_ticket_code
+        elif is_task_agent:
+            # Strictly task domain unless user explicitly targeted a ticket code
+            is_task_domain = not (has_ticket_code and not has_task_code)
+        else:
+            is_task_domain = (
+                has_task_in_pending
+                or has_task_words
+                or bool(context_task_space_id or context_task_space_name)
+                or str(context.get("page") or "").lower() in ["task", "task-management", "tasks"]
+                or str(context.get("pageScopeKey") or "").lower() in ["task", "task-management", "tasks"]
+            ) and not has_ticket_words
+
+        for item in raw_drafts:
+            if isinstance(item, dict):
+                if is_task_domain:
+                    item["entityType"] = "task"
+                    if item.get("ticketSpaceName") and not item.get("taskSpaceName"):
+                        item["taskSpaceName"] = item.pop("ticketSpaceName")
+                    if item.get("ticketSpaceId") and not item.get("taskSpaceId"):
+                        item["taskSpaceId"] = item.pop("ticketSpaceId")
+                    if not item.get("taskSpaceName") and context_task_space_name:
+                        item["taskSpaceName"] = context_task_space_name
+                    if not item.get("taskSpaceId") and context_task_space_id:
+                        item["taskSpaceId"] = context_task_space_id
+                    if matched_space:
+                        item["taskSpaceName"] = matched_space["name"]
+                        item["taskSpaceId"] = matched_space.get("id")
+                else:
+                    item["entityType"] = "ticket"
+                    item.pop("parentTaskId", None)
+                    item.pop("parentTaskName", None)
+                    item.pop("parentTaskCode", None)
+                    item.pop("hierarchyLevelSequence", None)
+                    item.pop("hierarchyLevelName", None)
+                    item.pop("isCreateNewLevel1", None)
+                    if item.get("taskSpaceName") and not item.get("ticketSpaceName"):
+                        item["ticketSpaceName"] = item.pop("taskSpaceName")
+                    if item.get("taskSpaceId") and not item.get("ticketSpaceId"):
+                        item["ticketSpaceId"] = item.pop("taskSpaceId")
+                    if not item.get("ticketSpaceName") and context_ticket_space_name:
+                        item["ticketSpaceName"] = context_ticket_space_name
+                    if not item.get("ticketSpaceId") and context_ticket_space_id:
+                        item["ticketSpaceId"] = context_ticket_space_id
+                    if matched_space:
+                        item["ticketSpaceName"] = matched_space["name"]
+                        item["ticketSpaceId"] = matched_space.get("id")
+
+        # Detect whether drafting a task or a ticket
+        is_task_intent = is_task_domain
 
         clean_drafts: List[Dict[str, Any]] = []
         all_missing_fields: List[str] = []
         needs_fields: List[Dict[str, Any]] = []
 
-        # Resolve ticket space from active page context if available
-        context_space_name = (
-            context.get("ticket_space_name")
-            or context.get("ticketSpaceName")
-            or (context.get("spaceName") if context.get("ticket_space_id") or context.get("ticketSpaceId") else None)
-        )
-        context_space_id = (
-            context.get("ticket_space_id")
-            or context.get("ticketSpaceId")
-        )
-
         for item in raw_drafts:
             if not isinstance(item, dict):
                 continue
 
-            if source_code and not item.get("sourceTicketCode"):
-                item["sourceTicketCode"] = source_code
+            if is_task_intent or item.get("entityType") == "task":
+                item["entityType"] = "task"
+                # If user explicitly intended top-level container (e.g. project, initiative, folder)
+                is_explicit_root = any(w in user_msg_lower for w in ["create a project", "create project", "new project", "add project", "make a project", "create an initiative", "create initiative", "new initiative", "add folder", "as a new project", "create as a new project"])
+                if is_explicit_root:
+                    if not item.get("hierarchyLevelSequence"):
+                        item["hierarchyLevelSequence"] = 1
+                else:
+                    # User asked for a task or subtask - never default to Level 1 Project!
+                    has_batch_parent = bool(item.get("parentTaskName") and any(
+                        isinstance(other, dict) and other != item and
+                        (other.get("name") or "").strip().lower() == item.get("parentTaskName", "").strip().lower()
+                        for other in raw_drafts
+                    ))
+                    if not has_batch_parent:
+                        if not item.get("parentTaskId") and not item.get("parentTaskName"):
+                            item["hierarchyLevelSequence"] = 1
+                            item["hierarchyLevelName"] = "Task"
+                    else:
+                        item["hierarchyLevelSequence"] = 2
+                        item["hierarchyLevelName"] = "Subtask"
 
-            # If user asks to clone or copy without a title, assign a placeholder that backend will update to source ticket name
-            if source_code:
-                current_name = str(item.get("name") or "").strip().lower()
-                if not current_name or any(current_name.startswith(p) for p in ["same as", "clone", "copy of", "duplicate", "like"]):
-                    item["name"] = f"{source_code} (clone)"
+                # Task space assignment from context
+                if not item.get("taskSpaceName") and not item.get("taskSpaceId"):
+                    if context_task_space_name:
+                        item["taskSpaceName"] = context_task_space_name
+                    if context_task_space_id:
+                        item["taskSpaceId"] = context_task_space_id
 
-            try:
-                draft_obj = TicketDraft(**item)
-                clean = draft_obj.model_dump(exclude_none=False)
-            except Exception:
                 clean = dict(item)
 
-            if source_code and not clean.get("sourceTicketCode"):
-                clean["sourceTicketCode"] = source_code
+                if not clean.get("name"):
+                    all_missing_fields.append("name")
 
-            # Auto-assign space from active page context if not already specified
-            if not clean.get("ticketSpaceName") and not clean.get("ticketSpaceId"):
-                if context_space_name:
-                    clean["ticketSpaceName"] = context_space_name
-                if context_space_id:
-                    clean["ticketSpaceId"] = context_space_id
+                if not clean.get("taskSpaceName") and not clean.get("taskSpaceId"):
+                    if "taskSpace" not in all_missing_fields:
+                        all_missing_fields.append("taskSpace")
+                elif not is_explicit_root and not clean.get("isCreateNewLevel1") and not clean.get("parentTaskId") and not clean.get("parentTaskName"):
+                    # Task has a space but user hasn't selected parent project yet and didn't specify creating root
+                    if "parentTask" not in all_missing_fields:
+                        all_missing_fields.append("parentTask")
 
-            # Only require name if not cloning from an existing ticket
-            if not clean.get("name") and not clean.get("sourceTicketCode"):
-                all_missing_fields.append("name")
+                clean_drafts.append(clean)
+            else:
+                # Standard ticket draft logic
+                item["entityType"] = "ticket"
+                if source_code and not item.get("sourceTicketCode"):
+                    item["sourceTicketCode"] = source_code
 
-            # Only require space if not specified and not cloning (since space can be inherited from source ticket)
-            if not clean.get("ticketSpaceName") and not clean.get("ticketSpaceId") and not clean.get("sourceTicketCode"):
-                if "ticketSpace" not in all_missing_fields:
-                    all_missing_fields.append("ticketSpace")
+                # If user asks to clone or copy without a title, assign placeholder that backend will update
+                if source_code:
+                    current_name = str(item.get("name") or "").strip().lower()
+                    if not current_name or any(current_name.startswith(p) for p in ["same as", "clone", "copy of", "duplicate", "like"]):
+                        item["name"] = f"{source_code} (clone)"
 
-            clean_drafts.append(clean)
+                try:
+                    draft_obj = TicketDraft(**item)
+                    clean = draft_obj.model_dump(exclude_none=False)
+                    clean["entityType"] = "ticket"
+                except Exception:
+                    clean = dict(item)
+                    clean["entityType"] = "ticket"
 
-        if "ticketSpace" in all_missing_fields:
+                if source_code and not clean.get("sourceTicketCode"):
+                    clean["sourceTicketCode"] = source_code
+
+                # Auto-assign ticket space from active page context if not already specified
+                if not clean.get("ticketSpaceName") and not clean.get("ticketSpaceId"):
+                    if context_ticket_space_name:
+                        clean["ticketSpaceName"] = context_ticket_space_name
+                    if context_ticket_space_id:
+                        clean["ticketSpaceId"] = context_ticket_space_id
+
+                # Only require name if not cloning from an existing ticket
+                if not clean.get("name") and not clean.get("sourceTicketCode"):
+                    all_missing_fields.append("name")
+
+                # Only require space if not specified and not cloning
+                if not clean.get("ticketSpaceName") and not clean.get("ticketSpaceId") and not clean.get("sourceTicketCode"):
+                    if "ticketSpace" not in all_missing_fields:
+                        all_missing_fields.append("ticketSpace")
+
+                clean_drafts.append(clean)
+
+        if "taskSpace" in all_missing_fields:
+            needs_fields.append({
+                "field": "taskSpace",
+                "label": "Task Space",
+                "options": allowed_spaces,
+            })
+        elif "parentTask" in all_missing_fields:
+            needs_fields.append({
+                "field": "parentTask",
+                "label": "Select Project",
+                "options": [],
+            })
+        elif "ticketSpace" in all_missing_fields:
             needs_fields.append({
                 "field": "ticketSpace",
                 "label": "Ticket Space",
@@ -256,22 +457,63 @@ def make_extract_delta_node(llm):
         is_complete = len(all_missing_fields) == 0
 
         if not is_complete:
-            if "ticketSpace" in all_missing_fields:
+            if "taskSpace" in all_missing_fields:
+                summary_text = (
+                    "Which task space should I place the tasks in?"
+                    if len(clean_drafts) > 1
+                    else "Which task space should I place the task in?"
+                )
+            elif "parentTask" in all_missing_fields:
+                root_name = str(clean_drafts[0].get("rootTaskLevelName") or context.get("rootTaskLevelName") or context.get("root_task_level_name") or "project")
+                summary_text = f"Under what {root_name} should I create the tasks?" if len(clean_drafts) > 1 else f"Under what {root_name} should I create the task?"
+            elif "ticketSpace" in all_missing_fields:
                 summary_text = (
                     "Which ticket space should I place the tickets?"
                     if len(clean_drafts) > 1
                     else "Which ticket space should I place the ticket?"
                 )
             elif "name" in all_missing_fields:
-                summary_text = (
-                    "Please provide titles for the tickets."
-                    if len(clean_drafts) > 1
-                    else "Please provide a title for the ticket."
+                is_task = (
+                    is_task_intent
+                    or any(d.get("entityType") == "task" for d in clean_drafts)
+                    or any(d.get("parentTaskId") or d.get("parentTaskName") for d in clean_drafts)
+                    or bool(context.get("task_space_id") or context.get("taskSpaceId"))
                 )
+                if is_task:
+                    first_draft = clean_drafts[0] if clean_drafts else {}
+                    parent_info = first_draft.get("parentTaskName") or first_draft.get("parentTaskCode")
+                    space_info = first_draft.get("taskSpaceName")
+                    if parent_info:
+                        summary_text = (
+                            f"Here is your task draft structured under **{parent_info}**. "
+                            "The existing parent task is shown above for hierarchy context. You can edit the task title, adjust its schedule, priority, and assignee directly in the table below before saving."
+                        )
+                    elif space_info:
+                        summary_text = (
+                            f"Here is your task draft in **{space_info}**. "
+                            "You can provide a title, adjust its schedule, priority, and assignee directly in the table below before saving."
+                        )
+                    else:
+                        summary_text = (
+                            "Here is your prepared task draft. "
+                            "You can name the task and configure its schedule, status, priority, and assignee directly in the table below before saving."
+                        )
+                else:
+                    summary_text = (
+                        "Here is your prepared draft. "
+                        "You can provide a title and review or adjust its details directly in the table below before saving."
+                    )
             else:
                 summary_text = f"Please provide the missing information: {', '.join(all_missing_fields)}."
         else:
-            if source_code:
+            if is_task_intent:
+                title = clean_drafts[0].get("name") if clean_drafts else "your task"
+                space = clean_drafts[0].get("taskSpaceName") if clean_drafts else None
+                if space:
+                    summary_text = f"I've prepared your task draft '{title}' in '{space}'. Please review the details before proceeding."
+                else:
+                    summary_text = f"I've prepared your task draft '{title}'. Please review the details before proceeding."
+            elif source_code:
                 summary_text = f"I've prepared a new ticket draft based on **{source_code}**. Please review the details before proceeding."
             elif len(clean_drafts) > 1:
                 space = clean_drafts[0].get("ticketSpaceName") if clean_drafts else None
@@ -301,6 +543,8 @@ def make_extract_delta_node(llm):
         )
 
         primary_draft = clean_drafts[0] if clean_drafts else {}
+        action_name = "CREATE_TASK" if is_task_intent else "CREATE_TICKET"
+        entity_name = "task" if is_task_intent else "ticket"
         return {
             "draft": primary_draft,
             "drafts": clean_drafts,
@@ -310,6 +554,8 @@ def make_extract_delta_node(llm):
             "needs_fields": needs_fields,
             "summary": summary_text,
             "automation_summary": summary_text,
+            "automation_action": action_name,
+            "entity_type": entity_name,
             "messages": [AIMessage(content=summary_text)],
         }
 

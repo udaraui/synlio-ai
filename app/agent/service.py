@@ -49,7 +49,7 @@ def _resolve_status_update(node_name: str, node_output: Dict[str, Any]) -> Tuple
     elif node_name == "dispatcher":
         intent = node_output.get("intent")
         if intent == "automation":
-            return "__REPLACE__Drafting your ticket...", None
+            return "__REPLACE__Preparing your draft...", None
         elif intent == "general_chat":
             msgs = node_output.get("messages", [])
             if msgs:
@@ -58,13 +58,16 @@ def _resolve_status_update(node_name: str, node_output: Dict[str, Any]) -> Tuple
 
     elif node_name == "automation":
         mutation_payload = node_output.get("mutation_payload")
-        if not mutation_payload and node_output.get("automation_action") == "UPDATE_TICKET":
+        if not mutation_payload and node_output.get("automation_action") in ("UPDATE_TICKET", "UPDATE_TASK"):
+            action = node_output.get("automation_action")
+            entity_type = node_output.get("entity_type") or ("task" if action == "UPDATE_TASK" else "ticket")
             mutation_payload = {
-                "action": "UPDATE_TICKET",
+                "action": action,
+                "entityType": entity_type,
                 "status": "READY" if node_output.get("targets") else "NEEDS_INPUT",
                 "targets": node_output.get("targets") or [],
                 "changes": node_output.get("changes") or {},
-                "summary": node_output.get("automation_summary") or node_output.get("summary") or "Ticket updated.",
+                "summary": node_output.get("automation_summary") or node_output.get("summary") or "Updated.",
             }
 
         if mutation_payload:
@@ -72,7 +75,7 @@ def _resolve_status_update(node_name: str, node_output: Dict[str, Any]) -> Tuple
                 node_output.get("automation_summary")
                 or node_output.get("summary")
                 or mutation_payload.get("summary")
-                or "Ticket updated."
+                or "Updated."
             )
             return None, f"{summary}\n\n__MUTATION_PAYLOAD__{json.dumps(mutation_payload)}"
 
@@ -86,14 +89,17 @@ def _resolve_status_update(node_name: str, node_output: Dict[str, Any]) -> Tuple
             drafts = [draft]
         missing_fields = node_output.get("missing_fields") or []
         needs_fields = node_output.get("needs_fields") or []
+        action = node_output.get("automation_action") or ("CREATE_TASK" if node_output.get("entity_type") == "task" else "CREATE_TICKET")
+        entity_type = node_output.get("entity_type") or ("task" if action == "CREATE_TASK" else "ticket")
         summary = (
             node_output.get("automation_summary")
             or node_output.get("summary")
-            or ("Which ticket space should I place the tickets?" if (drafts and len(drafts) > 1) else "Ticket draft ready")
+            or ("Draft ready")
         )
         
         payload = {
-            "action": "CREATE_TICKET",
+            "action": action,
+            "entityType": entity_type,
             "status": "NEEDS_INPUT" if missing_fields else "READY",
             "summary": summary,
             "draft": draft,
@@ -329,6 +335,7 @@ class InsightAgent:
             "user_id": user_id,
             "user_email": user_email,
             "company_id": company_id,
+            "agent": agent,
             "scope": scope,
             "context": context,
             "chat_mode": effective_mode,

@@ -8,9 +8,9 @@ system_prompt: |
   Your job is to classify the user's intent into exactly ONE of the following categories:
 
   1. "automation"
-     - The user wants to PERFORM AN ACTION to create, add, log, file, or draft an entity (ticket, bug, issue, task, project, milestone, sprint).
-     - The user wants to MODIFY, UPDATE, MOVE, ROUTE, REASSIGN, or CHANGE attributes of one or more existing tickets or tasks (e.g. change status, change priority/severity, route to queue, assign to member, update title/description, change ticket type).
-     - Any directive telling the system to alter, set, or change values on specific ticket codes (e.g. PTS-10, PTS-11) is ALWAYS "automation".
+     - The user wants to PERFORM AN ACTION to create, add, log, file, or draft an entity (ticket, bug, issue, task, project, initiative, folder, epic, milestone, sprint).
+     - The user wants to MODIFY, UPDATE, MOVE, ROUTE, REASSIGN, or CHANGE attributes of one or more existing tickets or tasks (e.g. change status, change priority/severity, route to queue, assign to member/resource, update title/description, change ticket type, adjust dates/estimates).
+     - Any directive telling the system to alter, set, or change values on specific ticket codes (e.g. PTS-10, PTS-11) or task codes (e.g. TSK-1, PRJ-10) is ALWAYS "automation".
      - Examples of "automation":
        * "Change priority of PTS-10, PTS-11, and PTS-12 to Low"
        * "Move PTS-7 and PTS-8 to In Review and route to IT queue"
@@ -23,6 +23,11 @@ system_prompt: |
        * "Add a ticket to update the database schema"
        * "File an issue for login latency"
        * "Rename PTS-1 to OAuth Login Bug"
+       * "Create a task for website launch"
+       * "Add a project called Mobile Redesign"
+       * "Move PRJ-10 to In Progress and set due date to Friday"
+       * "Assign task TSK-4 to Udara"
+       * "Mark TSK-15 as Completed"
 
   2. "analytics"
      - The user wants to QUERY, VIEW, INSPECT, SEARCH, ANALYZE, or REPORT on existing data, metrics, workloads, tickets, or projects.

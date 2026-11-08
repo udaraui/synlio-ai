@@ -83,9 +83,12 @@ def make_extract_mutation_node(llm):
             llm_error = str(e)
             extracted_data = {}
 
-        # Deterministic regex extraction of ticket codes
-        # 1. If user explicitly specified ticket code(s) in CURRENT message, use ONLY them!
-        user_msg_codes = [c.strip().upper() for c in re.findall(r'\b[A-Za-z]{2,10}-\d+\b', user_msg)]
+        # Deterministic regex extraction of ticket and task codes
+        # Ticket code: Prefix hyphen and ONLY digits (e.g. PTS-23)
+        # Task code: Prefix hyphen and starts with English letter (e.g. PTS-P2)
+        ticket_codes = [c.strip().upper() for c in re.findall(r'\b[A-Za-z0-9]+-\d+\b', user_msg)]
+        task_codes = [c.strip().upper() for c in re.findall(r'\b[A-Za-z0-9]+-[A-Za-z]+[A-Za-z0-9_-]*\b', user_msg)]
+        user_msg_codes = ticket_codes + task_codes
         if user_msg_codes:
             targets = []
             seen_targets = set()
@@ -96,10 +99,12 @@ def make_extract_mutation_node(llm):
         else:
             targets = [str(t).strip().upper() for t in (extracted_data.get("targets") or []) if str(t).strip()]
             if not targets:
-                # Only check recent history if current user message has NO ticket codes
-                history_codes = [c.strip().upper() for c in re.findall(r'\b[A-Za-z]{2,10}-\d+\b', chat_str)]
-                if history_codes:
-                    targets = [history_codes[-1]]
+                # Only check recent history if current user message has NO codes
+                hist_ticket_codes = [c.strip().upper() for c in re.findall(r'\b[A-Za-z0-9]+-\d+\b', chat_str)]
+                hist_task_codes = [c.strip().upper() for c in re.findall(r'\b[A-Za-z0-9]+-[A-Za-z]+[A-Za-z0-9_-]*\b', chat_str)]
+                all_hist = hist_ticket_codes + hist_task_codes
+                if all_hist:
+                    targets = [all_hist[-1]]
 
         # Fallback to context ticketCode if still no target was parsed from text
         if not targets:
@@ -137,15 +142,72 @@ def make_extract_mutation_node(llm):
                     clean_changes["severityName"] = sev.capitalize()
                     break
 
+        # Hierarchy Immutability Guard: Never allow modifying hierarchy level of an existing task
+        hierarchy_keywords = ["hierarchy", "level", "milestone", "subtask", "sub-task", "project", "folder"]
+        has_hierarchy_alteration_intent = any(
+            (hk in user_text_lower and any(act in user_text_lower for act in ["change", "convert", "turn into", "make into", "switch to", "promote", "demote", "set level", "change level"]))
+            for hk in hierarchy_keywords
+        )
+        if extracted_data.get("attemptedHierarchyChange") or has_hierarchy_alteration_intent:
+            refusal_summary = "Hierarchy levels are permanently fixed upon task creation and cannot be modified."
+            elapsed = time.time() - start_time
+            record_node_telemetry(
+                node="automation_extract_mutation",
+                latency_ms=int(elapsed * 1000),
+                status="HIERARCHY_MUTATION_REFUSED",
+                output_data={"action": "refusal", "reason": "hierarchy_immutable"},
+            )
+            return {
+                "mutation_payload": {
+                    "action": "UPDATE_TASK",
+                    "status": "REFUSED",
+                    "entityType": "task",
+                    "targets": targets,
+                    "changes": {},
+                    "summary": refusal_summary,
+                    "warnings": [refusal_summary],
+                    "attemptedHierarchyChange": True,
+                },
+                "automation_action": "UPDATE_TASK",
+                "summary": refusal_summary,
+                "automation_summary": refusal_summary,
+                "messages": [AIMessage(content=refusal_summary)],
+            }
+
+        agent = state.get("agent") or (state.get("active_workers")[0] if state.get("active_workers") else None)
+        is_ticket_agent = agent in ("ticket_analytics", "ticket")
+        is_task_agent = agent in ("project_analytics", "task", "project")
+
+        has_target_task_codes = any(bool(re.match(r'^[A-Za-z0-9]+-[A-Za-z]+', t)) for t in targets)
+        has_target_ticket_codes = any(bool(re.match(r'^[A-Za-z0-9]+-\d+$', t)) for t in targets)
+
+        if has_target_task_codes and not has_target_ticket_codes:
+            is_task = True
+        elif has_target_ticket_codes and not has_target_task_codes:
+            is_task = False
+        elif is_ticket_agent:
+            is_task = False
+        elif is_task_agent:
+            is_task = True
+        else:
+            is_task = (
+                extracted_data.get("entityType") == "task"
+                or extracted_data.get("action") == "UPDATE_TASK"
+                or bool(context.get("task_space_id") or context.get("taskSpaceId"))
+                or any(w in user_text_lower for w in ["task", "project", "initiative", "folder", "milestone", "subtask"])
+            )
+        action_name = "UPDATE_TASK" if is_task else "UPDATE_TICKET"
+        entity_name = "task" if is_task else "ticket"
+
         filter_data = extracted_data.get("filter") or {}
         # Guard: if assignee was extracted in changes but user query indicates filter (e.g. "assigned to X"), move to filter
-        if "assigned to" in user_text_lower or "tickets for" in user_text_lower:
+        if "assigned to" in user_text_lower or "tickets for" in user_text_lower or "tasks for" in user_text_lower:
             if clean_changes.get("assigneeName") and not filter_data.get("assignee"):
                 filter_data["assignee"] = clean_changes.pop("assigneeName")
 
         summary = extracted_data.get("summary")
         # Overwrite summary if empty or if LLM mistakenly asked for ticket code despite targets being resolved
-        if not summary or (targets and "Which ticket would you like to update" in summary):
+        if not summary or (targets and ("Which ticket would you like to update" in summary or "Which item would you like to update" in summary)):
             if targets:
                 status_val = clean_changes.get("statusName") or clean_changes.get("status")
                 target_str = ", ".join(targets)
@@ -155,14 +217,14 @@ def make_extract_mutation_node(llm):
                     changed_items = [f"{k}: {v}" for k, v in clean_changes.items()]
                     summary = f"I've updated **{target_str}**" + (f" ({', '.join(changed_items)})." if changed_items else ".")
             elif filter_data.get("assignee"):
-                summary = f"Which ticket(s) assigned to **{filter_data['assignee']}** would you like to update?"
+                summary = f"Which {entity_name}(s) assigned to **{filter_data['assignee']}** would you like to update?"
             else:
-                summary = "Which ticket would you like to update? Please provide the ticket code (e.g. PTS-12)."
+                summary = f"Which {entity_name} would you like to update? Please provide the {entity_name} code (e.g. { 'PRJ-10' if is_task else 'PTS-12' })."
 
         mutation_payload = {
-            "action": extracted_data.get("action", "UPDATE_TICKET") or "UPDATE_TICKET",
+            "action": action_name,
             "status": "READY" if targets else "NEEDS_INPUT",
-            "entityType": extracted_data.get("entityType", "ticket"),
+            "entityType": entity_name,
             "targets": targets,
             "filter": filter_data if filter_data else None,
             "changes": clean_changes,

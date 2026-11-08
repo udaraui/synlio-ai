@@ -33,29 +33,37 @@ def route_automation_start(state: AutomationState) -> str:
         "clone", "duplicate", "copy", "same as"
     ]
     has_creation_intent = any(cv in user_msg_clean for cv in creation_verbs)
-    has_ticket_code = bool(re.search(r'\b[A-Za-z]{2,10}-\d+\b', user_msg))
+    has_ticket_code = bool(re.search(r'\b[A-Za-z0-9]+-\d+\b', user_msg))
+    has_task_code = bool(re.search(r'\b[A-Za-z0-9]+-[A-Za-z]+[A-Za-z0-9_-]*\b', user_msg))
+    has_any_code = has_ticket_code or has_task_code
 
-    # If user explicitly intends to create/draft a ticket and is not updating an existing ticket code
-    if has_creation_intent and not (has_ticket_code and any(mv in user_msg_clean for mv in ["update", "move", "change status", "close ticket"])):
-        return "extract_delta"
-
-    # 2. Check for mutation verbs
     mutation_verbs = [
         "move", "change status", "change the status", "update status", "update the status",
-        "update ticket", "update", "assign", "reassign", "set severity", "set status",
-        "set priority", "rename", "mark as", "mark ticket", "close ticket", "set all",
-        "all tickets", "tickets assigned", "tickets for", "move all", "reassign all"
+        "update ticket", "update task", "update", "assign", "reassign", "set severity", "set status",
+        "set priority", "rename", "mark as", "mark ticket", "mark task", "close ticket", "close task",
+        "set all", "all tickets", "all tasks", "tickets assigned", "tasks assigned", "tickets for", "tasks for",
+        "move all", "reassign all"
     ]
-    if any(v in user_msg_clean for v in mutation_verbs):
-        return "extract_mutation"
+    has_mutation_intent = any(v in user_msg_clean for v in mutation_verbs)
 
-    # 3. If user references a specific ticket code like PTS-12 without creation keywords
-    if has_ticket_code:
-        return "extract_mutation"
-
-    # If pending_draft is present and user did NOT issue a mutation, continue creation draft
-    if state.get("pending_draft"):
+    # 1. CRITICAL: If pending_draft is present and user did NOT issue an explicit mutation verb,
+    # the user is answering a disambiguation question or continuing the creation draft (e.g. selecting a project code badge)!
+    if state.get("pending_draft") and not has_mutation_intent:
         return "extract_delta"
+
+    # 2. Prioritize creation/drafting intent over mutation
+    if has_creation_intent and not (has_any_code and has_mutation_intent):
+        return "extract_delta"
+
+    # 3. Check for explicit mutation verbs
+    if has_mutation_intent:
+        return "extract_mutation"
+
+    # 4. If user references a specific ticket or task code without creation keywords and without an active draft
+    if has_any_code:
+        return "extract_mutation"
+
+    return "extract_delta"
 
     return "extract_delta"
 

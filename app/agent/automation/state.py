@@ -18,4 +18,7 @@ class AutomationState(TypedDict, total=False):
     attachments: Optional[List[Dict[str, Any]]]
     mutation_payload: Optional[Dict[str, Any]]
     automation_action: Optional[str]
+    entity_type: Optional[str]  # "ticket" | "task"
+    agent: Optional[str]
+    active_workers: Optional[List[str]]
 

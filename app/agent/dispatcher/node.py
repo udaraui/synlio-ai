@@ -241,72 +241,9 @@ def make_dispatcher_node(llm):
                     "messages": [AIMessage(content=FULL_SCREEN_AUTOMATION_MSG)],
                 }
 
-            has_ticket_keyword = any(k in user_msg_clean for k in ("ticket", "bug", "issue"))
-
-            # Check if user attempts Task Automation in the Ticket side panel
-            is_task_request = any(
-                phrase in user_msg_clean
-                for phrase in [
-                    "task automation",
-                    "create a task",
-                    "create task",
-                    "add a task",
-                    "add task",
-                    "new task",
-                    "log a task",
-                    "log task",
-                    "file a task",
-                    "draft a task",
-                    "make a task",
-                    "task space",
-                    "root task",
-                ]
-            )
-            if is_task_request and not has_ticket_keyword:
-                elapsed = time.time() - start_time
-                record_node_telemetry(
-                    node="dispatcher",
-                    latency_ms=int(elapsed * 1000),
-                    status="TASK_AUTOMATION_NOT_SUPPORTED",
-                    output_data={"intent": "refusal", "reason": "task_automation_in_ticket_panel"},
-                )
-                return {
-                    "intent": "general_chat",
-                    "messages": [AIMessage(content=TASK_AUTOMATION_MSG)],
-                }
-
-            # Check if user attempts Project Automation (temporarily unavailable)
-            is_project_request = any(
-                phrase in user_msg_clean
-                for phrase in [
-                    "project automation",
-                    "create a project",
-                    "create project",
-                    "add a project",
-                    "add project",
-                    "new project",
-                    "make a project",
-                    "project milestone",
-                    "create a sprint",
-                    "new sprint",
-                ]
-            )
-            if is_project_request and not has_ticket_keyword:
-                elapsed = time.time() - start_time
-                record_node_telemetry(
-                    node="dispatcher",
-                    latency_ms=int(elapsed * 1000),
-                    status="UNAVAILABLE_DOMAIN",
-                    output_data={"intent": "refusal", "reason": "project_automation_unavailable"},
-                    error_message=UNAVAILABLE_MSG,
-                )
-                return {
-                    "intent": "general_chat",
-                    "messages": [AIMessage(content=UNAVAILABLE_MSG)],
-                }
-
-            # Check ticket creation permissions (Permission 103)
-            if scope.get("can_create_ticket") is False:
+            # Check ticket creation permissions (Permission 103) ONLY for ticket creation requests
+            is_ticket_request = any(k in user_msg_clean for k in ("ticket", "bug", "issue"))
+            if is_ticket_request and scope.get("can_create_ticket") is False:
                 elapsed = time.time() - start_time
                 record_node_telemetry(
                     node="dispatcher",
