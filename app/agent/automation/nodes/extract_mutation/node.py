@@ -205,13 +205,29 @@ def make_extract_mutation_node(llm):
             if clean_changes.get("assigneeName") and not filter_data.get("assignee"):
                 filter_data["assignee"] = clean_changes.pop("assigneeName")
 
+        # Fuzzy target title / name extraction if no explicit code targets found
+        if not targets:
+            fuzzy_name = extracted_data.get("target_name") or extracted_data.get("target_title") or extracted_data.get("target") or filter_data.get("query")
+            if fuzzy_name and not filter_data.get("query"):
+                filter_data["query"] = str(fuzzy_name).strip()
+            if not filter_data.get("query"):
+                title_match = re.search(r'\b(?:update|change|move|mark)\s+(?:task\s+|ticket\s+)?([A-Za-z0-9\s_-]+?)\s+(?:to|as|into|status)\b', user_msg, re.IGNORECASE)
+                if title_match:
+                    candidate_name = title_match.group(1).strip()
+                    if candidate_name and candidate_name.lower() not in ["all", "the", "this", "my"]:
+                        filter_data["query"] = candidate_name
+
+        is_children_scope = bool(re.search(r'\b(?:all\s+)?(?:child(?:ren)?|subtasks?|tasks?)\s+of\b', user_msg, re.IGNORECASE))
+
         summary = extracted_data.get("summary")
         # Overwrite summary if empty or if LLM mistakenly asked for ticket code despite targets being resolved
         if not summary or (targets and ("Which ticket would you like to update" in summary or "Which item would you like to update" in summary)):
             if targets:
                 status_val = clean_changes.get("statusName") or clean_changes.get("status")
                 target_str = ", ".join(targets)
-                if status_val:
+                if is_children_scope and status_val:
+                    summary = f"I will move all child tasks of **{target_str}** to **{status_val}**."
+                elif status_val:
                     summary = f"I've updated **{target_str}** to **{status_val}**."
                 else:
                     changed_items = [f"{k}: {v}" for k, v in clean_changes.items()]
@@ -226,6 +242,8 @@ def make_extract_mutation_node(llm):
             "status": "READY" if targets else "NEEDS_INPUT",
             "entityType": entity_name,
             "targets": targets,
+            "targetScope": "children" if is_children_scope else "direct",
+            "includeChildren": is_children_scope,
             "filter": filter_data if filter_data else None,
             "changes": clean_changes,
             "options": [],
