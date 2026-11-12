@@ -83,11 +83,19 @@ def make_extract_mutation_node(llm):
             llm_error = str(e)
             extracted_data = {}
 
+        # Blacklist common hyphenated English words that are NOT task or ticket codes
+        CODE_BLACKLIST = {
+            "HIGH-PRIORITY", "LOW-PRIORITY", "MEDIUM-PRIORITY", "CRITICAL-PRIORITY",
+            "IN-PROGRESS", "TO-DO", "TO-START", "IN-REVIEW", "SUB-TASK", "BUG-FIX",
+            "USER-FRIENDLY", "HIGH-SEVERITY", "LOW-SEVERITY", "MEDIUM-SEVERITY"
+        }
+
         # Deterministic regex extraction of ticket and task codes
-        # Ticket code: Prefix hyphen and ONLY digits (e.g. PTS-23)
-        # Task code: Prefix hyphen and starts with English letter (e.g. PTS-P2)
-        ticket_codes = [c.strip().upper() for c in re.findall(r'\b[A-Za-z0-9]+-\d+\b', user_msg)]
-        task_codes = [c.strip().upper() for c in re.findall(r'\b[A-Za-z0-9]+-[A-Za-z]+[A-Za-z0-9_-]*\b', user_msg)]
+        # Ticket code: Prefix hyphen and ONLY digits (e.g. PTS-23, TSU-5, SSD-85)
+        # Task code: Prefix hyphen, level letter, and digits (e.g. PTS-P2, TSU-P10, PRJ-P7)
+        # Note: Must strictly end with digits to avoid matching hyphenated words like High-priority
+        ticket_codes = [c.strip().upper() for c in re.findall(r'\b[A-Za-z0-9]+-\d+\b', user_msg) if c.strip().upper() not in CODE_BLACKLIST]
+        task_codes = [c.strip().upper() for c in re.findall(r'\b[A-Za-z0-9]+-[A-Za-z]+\d+\b', user_msg) if c.strip().upper() not in CODE_BLACKLIST]
         user_msg_codes = ticket_codes + task_codes
         if user_msg_codes:
             targets = []
@@ -97,20 +105,7 @@ def make_extract_mutation_node(llm):
                     seen_targets.add(c)
                     targets.append(c)
         else:
-            targets = [str(t).strip().upper() for t in (extracted_data.get("targets") or []) if str(t).strip()]
-            if not targets:
-                # Only check recent history if current user message has NO codes
-                hist_ticket_codes = [c.strip().upper() for c in re.findall(r'\b[A-Za-z0-9]+-\d+\b', chat_str)]
-                hist_task_codes = [c.strip().upper() for c in re.findall(r'\b[A-Za-z0-9]+-[A-Za-z]+[A-Za-z0-9_-]*\b', chat_str)]
-                all_hist = hist_ticket_codes + hist_task_codes
-                if all_hist:
-                    targets = [all_hist[-1]]
-
-        # Fallback to context ticketCode if still no target was parsed from text
-        if not targets:
-            ctx_code = context.get("ticketCode") or context.get("code") or context.get("ticket_code")
-            if ctx_code:
-                targets = [str(ctx_code).strip().upper()]
+            targets = [str(t).strip().upper() for t in (extracted_data.get("targets") or []) if str(t).strip() and str(t).strip().upper() not in CODE_BLACKLIST]
 
         raw_changes = extracted_data.get("changes") or {}
         clean_changes = {}
@@ -118,18 +113,42 @@ def make_extract_mutation_node(llm):
             if v is not None and str(v).strip() != "" and str(v).lower() != "null":
                 clean_changes[k] = v
 
+        # Initialize filter_data early so it is always in scope for severity and status detection
+        filter_data = extracted_data.get("filter") or {}
+
+        # Deterministic extraction of target status if missed by LLM
+        user_text_lower = f"{user_msg} {chat_str}".lower()
+        is_bulk_all = bool(
+            re.search(r'\b(?:all|every)\s+(?:the\s+)?(?:tasks?|tickets?|items?|projects?)\b', user_text_lower)
+            or filter_data.get("all")
+        )
+
+        # Only check history if current user message has NO codes AND is NOT a bulk query
+        if not targets and not is_bulk_all:
+            hist_ticket_codes = [c.strip().upper() for c in re.findall(r'\b[A-Za-z0-9]+-\d+\b', chat_str) if c.strip().upper() not in CODE_BLACKLIST]
+            hist_task_codes = [c.strip().upper() for c in re.findall(r'\b[A-Za-z0-9]+-[A-Za-z]+\d+\b', chat_str) if c.strip().upper() not in CODE_BLACKLIST]
+            all_hist = hist_ticket_codes + hist_task_codes
+            if all_hist:
+                targets = [all_hist[-1]]
+
+        # Fallback to context ticketCode if still no target was parsed from text
+        if not targets and not is_bulk_all:
+            ctx_code = context.get("ticketCode") or context.get("code") or context.get("ticket_code")
+            if ctx_code and str(ctx_code).strip().upper() not in CODE_BLACKLIST:
+                targets = [str(ctx_code).strip().upper()]
+
         # Deterministic extraction of target status if missed by LLM
         user_text_lower = f"{user_msg} {chat_str}".lower()
         if not clean_changes.get("statusName") and not clean_changes.get("status"):
             status_mappings = [
-                (r'\b(?:to|as|into|set to)\s+(?:status\s+)?in\s*progress\b|\bmove\b.*\bto in progress\b', "In Progress"),
-                (r'\b(?:to|as|into|set to)\s+(?:status\s+)?done\b|\bmark\s+(?:as\s+)?done\b|\bcompleted?\b', "Done"),
-                (r'\b(?:to|as|into|set to)\s+(?:status\s+)?in\s*review\b', "In Review"),
-                (r'\b(?:to|as|into|set to)\s+(?:status\s+)?to\s*start\b|\bto-start\b', "To Start"),
-                (r'\b(?:to|as|into|set to)\s+(?:status\s+)?to\s*do\b|\btodo\b', "To Do"),
-                (r'\b(?:to|as|into|set to)\s+(?:status\s+)?closed?\b|\bclose ticket\b', "Closed"),
-                (r'\b(?:to|as|into|set to)\s+(?:status\s+)?open\b|\breopen\b', "Open"),
-                (r'\b(?:to|as|into|set to)\s+(?:status\s+)?resolved\b|\bresolve\b', "Resolved"),
+                (r'\b(?:to|as|into|set to|mark as|mark|make)\b.*?\bin\s*progress\b|\bin\s*progress\b', "In Progress"),
+                (r'\b(?:to|as|into|set to|mark as|mark|make)\b.*?\bdone\b|\bmark\s+(?:as\s+)?done\b|\bcompleted?\b', "Done"),
+                (r'\b(?:to|as|into|set to|mark as|mark|make)\b.*?\bin\s*review\b', "In Review"),
+                (r'\b(?:to|as|into|set to|mark as|mark|make)\b.*?\bto\s*start\b|\bto-start\b', "To Start"),
+                (r'\b(?:to|as|into|set to|mark as|mark|make)\b.*?\bto\s*do\b|\btodo\b', "To Do"),
+                (r'\b(?:to|as|into|set to|mark as|mark|make)\b.*?\bclosed?\b|\bclose ticket\b', "Closed"),
+                (r'\b(?:to|as|into|set to|mark as|mark|make)\b.*?\bopen\b|\breopen\b', "Open"),
+                (r'\b(?:to|as|into|set to|mark as|mark|make)\b.*?\bresolved\b|\bresolve\b', "Resolved"),
             ]
             for pattern, status_val in status_mappings:
                 if re.search(pattern, user_text_lower):
@@ -138,17 +157,51 @@ def make_extract_mutation_node(llm):
 
         if not clean_changes.get("severityName") and not clean_changes.get("severity"):
             for sev in ["critical", "high", "medium", "low"]:
-                if re.search(rf'\b(?:severity|priority)\b.*?\b(?:to|as|=)?\s*{sev}\b', user_text_lower) or re.search(rf'\b(?:to|as|mark as|set to)\s+{sev}\b', user_text_lower):
+                # Only apply to changes if the user is explicitly setting severity as a TARGET value
+                # e.g. "set priority to high" or "change severity to critical"
+                is_setting_severity = (
+                    re.search(rf'\b(?:severity|priority)\b.*?\b(?:to|as|=)?\s*{sev}\b', user_text_lower)
+                    or re.search(rf'\b(?:to|as|mark as|set to)\s+{sev}\b', user_text_lower)
+                )
+                # Detect filter-only severity: "all low-priority tasks", "high priority tickets"
+                # Pattern: severity adjective used as a DESCRIPTOR before task/ticket, not as a target change
+                is_filter_severity = bool(
+                    re.search(rf'\b{sev}[-\s]priority\b', user_text_lower)
+                    or re.search(rf'\b{sev}\s+(?:severity|priority)\s+(?:tasks?|tickets?|items?|bugs?)\b', user_text_lower)
+                )
+                if is_setting_severity and not is_filter_severity:
                     clean_changes["severityName"] = sev.capitalize()
+                    break
+                elif is_filter_severity and not is_setting_severity:
+                    # Move to filter instead of changes — this is a source filter, not a target mutation
+                    if not filter_data.get("severity") and not filter_data.get("severityName"):
+                        filter_data["severity"] = sev.capitalize()
                     break
 
         # Hierarchy Immutability Guard: Never allow modifying hierarchy level of an existing task
-        hierarchy_keywords = ["hierarchy", "level", "milestone", "subtask", "sub-task", "project", "folder"]
-        has_hierarchy_alteration_intent = any(
-            (hk in user_text_lower and any(act in user_text_lower for act in ["change", "convert", "turn into", "make into", "switch to", "promote", "demote", "set level", "change level"]))
-            for hk in hierarchy_keywords
+        # Note: Check ONLY current user message (never chat history) and require explicit level-altering action
+        has_hierarchy_alteration_intent = bool(
+            re.search(
+                r'\b(?:change\s+(?:the\s+)?(?:hierarchy|level)|change\s+level\s+of|set\s+(?:the\s+)?level|switch\s+(?:the\s+)?level|'
+                r'convert\s+(?:.*?\s+)?(?:in)?to\s+(?:a\s+)?(?:project|milestone|task|subtask|folder)|'
+                r'turn\s+(?:.*?\s+)?into\s+(?:a\s+)?(?:project|milestone|task|subtask|folder)|'
+                r'make\s+(?:.*?\s+)?(?:a\s+|into\s+(?:a\s+)?)(?:project|milestone|task|subtask|folder)|'
+                r'promote\s+(?:.*?\s+)?(?:to|into)\s+(?:a\s+)?(?:project|milestone|task)|'
+                r'demote\s+(?:.*?\s+)?(?:to|into)\s+(?:a\s+)?(?:task|subtask))\b',
+                user_msg,
+                re.IGNORECASE
+            )
         )
-        if extracted_data.get("attemptedHierarchyChange") or has_hierarchy_alteration_intent:
+        has_field_changes = bool(
+            clean_changes.get("statusName")
+            or clean_changes.get("status")
+            or clean_changes.get("severityName")
+            or clean_changes.get("assigneeName")
+            or clean_changes.get("name")
+            or clean_changes.get("description")
+        )
+        is_hierarchy_refusal = has_hierarchy_alteration_intent or (extracted_data.get("attemptedHierarchyChange") and not has_field_changes)
+        if is_hierarchy_refusal:
             refusal_summary = "Hierarchy levels are permanently fixed upon task creation and cannot be modified."
             elapsed = time.time() - start_time
             record_node_telemetry(
@@ -181,7 +234,12 @@ def make_extract_mutation_node(llm):
         has_target_task_codes = any(bool(re.match(r'^[A-Za-z0-9]+-[A-Za-z]+', t)) for t in targets)
         has_target_ticket_codes = any(bool(re.match(r'^[A-Za-z0-9]+-\d+$', t)) for t in targets)
 
-        if has_target_task_codes and not has_target_ticket_codes:
+        state_entity_type = state.get("entity_type")
+        if state_entity_type == "task":
+            is_task = True
+        elif state_entity_type == "ticket":
+            is_task = False
+        elif has_target_task_codes and not has_target_ticket_codes:
             is_task = True
         elif has_target_ticket_codes and not has_target_task_codes:
             is_task = False
@@ -204,6 +262,56 @@ def make_extract_mutation_node(llm):
         if "assigned to" in user_text_lower or "tickets for" in user_text_lower or "tasks for" in user_text_lower:
             if clean_changes.get("assigneeName") and not filter_data.get("assignee"):
                 filter_data["assignee"] = clean_changes.pop("assigneeName")
+
+        # Bulk query intent detection (e.g. "all tasks in todo", "every open ticket")
+        is_bulk_all = bool(
+            re.search(r'\b(?:all|every)\s+(?:the\s+)?(?:tasks?|tickets?|items?|projects?)\b', user_text_lower)
+            or filter_data.get("all")
+        )
+        if is_bulk_all:
+            filter_data["all"] = True
+
+        # Extract source status if user query has "in todo status", "with status To Do", etc.
+        if not filter_data.get("status"):
+            source_status_match = re.search(
+                r'\b(?:in|with|having)\s+(?:status\s+)?(to\s*do|todo|to\s*start|to-start|in\s*progress|in\s*review|done|completed|closed|open|resolved)(?:\s+status)?\b',
+                user_text_lower
+            )
+            if source_status_match:
+                matched_raw = source_status_match.group(1).strip()
+                status_map = {
+                    "to do": "To Do", "todo": "To Do",
+                    "to start": "To Start", "to-start": "To Start",
+                    "in progress": "In Progress",
+                    "in review": "In Review",
+                    "done": "Done", "completed": "Done",
+                    "closed": "Closed", "open": "Open", "resolved": "Resolved"
+                }
+                filter_data["status"] = status_map.get(matched_raw, matched_raw.title())
+
+        # If no explicit targets were specified, attempt to resolve matching targets from context tasks/tickets
+        if not targets:
+            candidate_list = (context.get("tasks") or []) if is_task else (context.get("tickets") or [])
+            if isinstance(candidate_list, list) and candidate_list:
+                f_status = (filter_data.get("status") or "").lower().replace(" ", "").replace("-", "")
+                f_assignee = (filter_data.get("assignee") or "").lower()
+
+                matched_targets = []
+                for item in candidate_list:
+                    item_code = item.get("code") or item.get("ticketCode") or item.get("taskCode")
+                    if not item_code:
+                        continue
+                    item_status = (item.get("statusName") or item.get("status") or "").lower().replace(" ", "").replace("-", "")
+                    item_assignee = (item.get("assigneeName") or item.get("assignee") or "").lower()
+
+                    if f_status and f_status != item_status:
+                        continue
+                    if f_assignee and f_assignee not in item_assignee:
+                        continue
+                    matched_targets.append(str(item_code).strip().upper())
+
+                if matched_targets and (is_bulk_all or f_status or f_assignee):
+                    targets = matched_targets
 
         # Fuzzy target title / name extraction if no explicit code targets found
         if not targets:
@@ -228,7 +336,10 @@ def make_extract_mutation_node(llm):
                 if is_children_scope and status_val:
                     summary = f"I will move all child tasks of **{target_str}** to **{status_val}**."
                 elif status_val:
-                    summary = f"I've updated **{target_str}** to **{status_val}**."
+                    if len(targets) > 1:
+                        summary = f"I will update {len(targets)} {entity_name}s ({target_str}) to **{status_val}**."
+                    else:
+                        summary = f"I've updated **{target_str}** to **{status_val}**."
                 else:
                     changed_items = [f"{k}: {v}" for k, v in clean_changes.items()]
                     summary = f"I've updated **{target_str}**" + (f" ({', '.join(changed_items)})." if changed_items else ".")

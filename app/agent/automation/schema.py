@@ -43,6 +43,9 @@ class TaskDraft(BaseModel):
     startDate: Optional[str] = Field(None, description="Start date (YYYY-MM-DD)")
     dueDate: Optional[str] = Field(None, description="Due date (YYYY-MM-DD)")
     estimateEffort: Optional[float] = Field(None, description="Estimated effort in hours")
+    sourceTaskCode: Optional[str] = Field(None, description="Source task or project code to clone (e.g. PTS-P7)")
+    cloneChildren: Optional[bool] = Field(None, description="Whether to recursively clone all child tasks and subtasks")
+    isCreateNewLevel1: Optional[bool] = Field(None, description="Flag indicating new root project creation")
 
 class NeedsFieldOption(BaseModel):
     id: Optional[int] = None

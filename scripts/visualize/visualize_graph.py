@@ -1,5 +1,8 @@
 """
-Script to visualize the LangGraph architecture for synlio-ai.
+Synlio Co-Pilot Unified Architecture Visualization Generator
+
+Generates a single comprehensive LangGraph architecture diagram (graph.png & graph_mermaid.md)
+expanding both subgraphs (Automation and Analytics) into one unified flowchart.
 
 Usage:
     .\\venv\\Scripts\\python scripts\\visualize\\visualize_graph.py
@@ -15,42 +18,59 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from langchain_openai import ChatOpenAI
-from app.agent.graph import create_graph
+from app.agent.master_graph import create_master_graph
+
 
 def main():
-    print("Compiling LangGraph state graph...")
-    api_key = os.getenv("GAMMA_API_KEY") or os.getenv("JEV_API_KEY")
-    if not api_key:
-        print("[ENV ERROR] Neither GAMMA_API_KEY nor JEV_API_KEY is set in environment (.env)!")
-    dummy_llm = ChatOpenAI(model="gemini-2.0-flash-001", api_key=api_key or "missing_key")
-    compiled_graph = create_graph(dummy_llm)
-    graph = compiled_graph.get_graph()
+    print("=" * 80)
+    print("Synlio Co-Pilot Unified Architecture Visualization")
+    print("=" * 80)
+
+    api_key = os.getenv("GAMMA_API_KEY") or os.getenv("JEV_API_KEY") or "dummy_key"
+    dummy_llm = ChatOpenAI(model="gemini-2.0-flash-001", api_key=api_key)
+
+    print("\nCompiling Master Graph with expanded subgraphs (Automation + Analytics)...")
+    compiled = create_master_graph(dummy_llm, orchestrator_llm=dummy_llm, formatter_llm=dummy_llm)
+    
+    # xray=True recursively expands all subgraphs into one unified diagram
+    unified_graph = compiled.get_graph(xray=True)
+    mermaid_code = unified_graph.draw_mermaid()
 
     png_path = SCRIPT_DIR / "graph.png"
-    md_path = SCRIPT_DIR / "graph_raw_mermaid.md"
+    md_path = SCRIPT_DIR / "graph_mermaid.md"
 
-    # 1. Save PNG
+    # 1. Export unified PNG diagram
     try:
-        png_bytes = graph.draw_mermaid_png()
+        png_bytes = unified_graph.draw_mermaid_png()
         with open(png_path, "wb") as f:
             f.write(png_bytes)
-        print(f" Successfully exported graph diagram to '{png_path.name}' in {SCRIPT_DIR.name}/!")
+        print(f" [PNG] Successfully generated unified diagram: '{png_path.name}' ({len(png_bytes):,} bytes)")
     except Exception as e:
-        print(f" Could not generate PNG (network/service error): {e}")
+        print(f" [PNG] Could not generate {png_path.name} (network error): {e}")
 
-    # 2. Save raw Mermaid markdown file
+    # 2. Export unified Mermaid Markdown
     try:
-        mermaid_code = graph.draw_mermaid()
-        with open(md_path, "w", encoding="utf-8") as f:
-            f.write("```mermaid\n" + mermaid_code + "\n```\n")
-        print(f" Successfully exported raw Mermaid syntax to '{md_path.name}' in {SCRIPT_DIR.name}/!")
-    except Exception as e:
-        print(f" Could not generate Mermaid syntax: {e}")
+        md_content = f"""# Synlio Co-Pilot Architecture
 
-    print("\nMermaid Definition:")
-    print("--------------------------------------------------")
-    print(graph.draw_mermaid())
-    print("--------------------------------------------------")
+Unified architecture diagram for the Synlio Co-Pilot AI engine.
+Shows end-to-end request flow through GateKeeper, Intent Dispatcher, Automation Subgraph, and Analytics Subgraph.
+
+![Architecture Graph](./graph.png)
+
+```mermaid
+{mermaid_code}
+```
+"""
+        with open(md_path, "w", encoding="utf-8") as f:
+            f.write(md_content)
+        print(f" [MD]  Successfully generated markdown: '{md_path.name}'")
+    except Exception as e:
+        print(f" [MD]  Could not generate {md_path.name}: {e}")
+
+    print("\n" + "=" * 80)
+    print("Unified graph generated successfully in scripts/visualize/!")
+    print("=" * 80)
+
 
 if __name__ == "__main__":
     main()

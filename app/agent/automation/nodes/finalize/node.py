@@ -87,17 +87,20 @@ def make_finalize_node(llm):
             draft = drafts[0] if drafts else (state.get("draft") or {})
             title = draft.get("name") or ("your task" if is_task else "your ticket")
             space = draft.get("taskSpaceName") if is_task else (draft.get("ticketSpaceName") or "Default Space")
-            source_code = draft.get("sourceTicketCode")
+            source_ticket_code = draft.get("sourceTicketCode")
+            source_task_code = draft.get("sourceTaskCode")
 
             if is_task:
                 clean_draft = dict(draft)
                 clean_draft["entityType"] = "task"
-                if space:
+                if source_task_code:
+                    summary_text = f"I've prepared your draft based on **{source_task_code}**. Please review the details before proceeding."
+                elif space:
                     summary_text = f"I've prepared your task draft '{title}' in '{space}'. Please review the details before proceeding."
                 else:
                     summary_text = f"I've prepared your task draft '{title}'. Please review the details before proceeding."
-            elif source_code:
-                summary_text = f"I've prepared a new ticket draft based on **{source_code}**. Please review the details before proceeding."
+            elif source_ticket_code:
+                summary_text = f"I've prepared a new ticket draft based on **{source_ticket_code}**. Please review the details before proceeding."
                 try:
                     clean_draft = TicketDraft(**draft).model_dump(exclude_none=False)
                 except Exception:

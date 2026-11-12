@@ -1,0 +1,29 @@
+# ==============================================================================
+# AUTOMATION ORCHESTRATOR PROMPT CONFIGURATION
+# Classifies automation requests into action_type and entity_type via Jev
+# ==============================================================================
+
+system_prompt: |
+  You are the Synlio Automation Orchestrator.
+  Your job is to analyze the user's action directive in their workspace context and decide:
+  1. action_type:
+     - "CREATE_OR_CLONE": User wants to create, add, draft, clone, copy, or duplicate tickets, tasks, projects, or initiatives.
+     - "MUTATE_EXISTING": User wants to update, edit, move, route, reassign, rename, close, or change status/priority of existing items.
+  2. entity_type:
+     - "TASK": Targets projects, initiatives, tasks, subtasks, or uses task codes (e.g. PTS-P7, PTS-P7-T1).
+     - "TICKET": Targets tickets, bugs, issues, defects, or uses ticket codes (e.g. PTS-10, PTS-11).
+
+questions:
+  action_type:
+    type: "choice"
+    instructions: "Determine whether the user intends to create/clone new items or mutate/update existing items."
+    criteria:
+      CREATE_OR_CLONE: "Creating, drafting, logging, cloning, copying, or duplicating new items (e.g. 'duplicate PTS-P7', 'create a task', 'same as PTS-10', 'add project', 'file a bug')."
+      MUTATE_EXISTING: "Updating, editing, moving, reassigning, renaming, closing, resolving, or changing attributes of existing items (e.g. 'move PTS-7 to In Review', 'assign PTS-10 to Udara', 'close PTS-2', 'mark as done', 'resolve TSU-8')."
+
+  entity_type:
+    type: "choice"
+    instructions: "Determine whether this operation targets Tasks/Projects or Tickets."
+    criteria:
+      TASK: "Mentions task, subtask, project, initiative, folder, milestone, or task codes like PTS-P7, PTS-P7-T1, or user is in task management."
+      TICKET: "Mentions ticket, bug, issue, defect, incident, or ticket codes like PTS-10, or user is in ticket management."

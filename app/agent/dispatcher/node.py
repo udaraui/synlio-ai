@@ -23,6 +23,62 @@ DISPATCHER_QUESTIONS = _CONFIG.get("questions", {})
 
 CANCEL_KEYWORDS = {"cancel", "never mind", "nevermind", "forget it", "stop", "discard"}
 
+# Greeting/help queries that should always return a friendly static response
+GREETING_PATTERNS = re.compile(
+    r'^\s*('
+    r'hi+|hello+|hey+|howdy|greetings|'
+    r'what\s+can\s+you\s+(do|help\s+me\s+with|help\s+with)|'
+    r'how\s+can\s+you\s+help|'
+    r'what\s+(are\s+you|do\s+you\s+do)|'
+    r'tell\s+me\s+about\s+yourself|'
+    r'help\s*$|'
+    r'what\'?s?\s+your\s+purpose|'
+    r'introduce\s+yourself|'
+    r'capabilities|what\s+can\s+i\s+(ask|do)|'
+    r'(good\s+)?(morning|afternoon|evening)'
+    r')\s*[!?.]*\s*$',
+    re.IGNORECASE,
+)
+
+GREETING_RESPONSE_TICKET = (
+    "Hi! I'm your **Ticket Analyst** — here's what I can help you with:\n\n"
+    "**🔍 Analytics & Queries**\n"
+    "- Show open/closed tickets in a space\n"
+    "- Filter tickets by severity, assignee, type, or queue\n"
+    "- Ticket workload and SLA summaries\n\n"
+    "**⚡ Automation**\n"
+    "- Create, update, or bulk-update tickets\n"
+    "- Change status, severity, assignee, type, or queue on tickets\n"
+    "- Assign high-priority tickets to a team member\n\n"
+    "Just type what you'd like to do and I'll take it from there!"
+)
+
+GREETING_RESPONSE_PROJECT = (
+    "Hi! I'm your **Project Analyst** — here's what I can help you with:\n\n"
+    "**🔍 Analytics & Queries**\n"
+    "- Show tasks, milestones, or projects in a space\n"
+    "- Filter by status, severity, assignee, or hierarchy level\n"
+    "- Workload and progress summaries\n\n"
+    "**⚡ Automation**\n"
+    "- Create, update, or bulk-update tasks\n"
+    "- Change status, severity, assignee, or dates on tasks\n"
+    "- Move all tasks of a certain priority to a new status\n\n"
+    "Just type what you'd like to do and I'll take it from there!"
+)
+
+GREETING_RESPONSE_GENERAL = (
+    "Hi! I'm your **Co-Pilot** — here's what I can help you with:\n\n"
+    "**🔍 Analytics & Queries**\n"
+    "- Show open/closed tickets or tasks in a space\n"
+    "- Filter by status, severity, assignee, type, or queue\n"
+    "- Workload, SLA, and progress summaries\n\n"
+    "**⚡ Automation**\n"
+    "- Create, update, or bulk-update tickets and tasks\n"
+    "- Change status, severity, assignee, type, dates, and more\n"
+    "- Assign high-priority tickets or move all tasks to a new status\n\n"
+    "Just type what you'd like to do and I'll take it from there!"
+)
+
 UNAVAILABLE_MSG = (
     "Project Analytics, Ticket Analytics, and Project Automation are temporarily unavailable while system updates are underway. "
     "Only Resource Analytics and Ticket Automation are currently available."
@@ -67,6 +123,33 @@ def make_dispatcher_node(llm):
                 break
 
         user_msg_clean = user_msg.strip().lower()
+
+        # -------------------------------------------------------------
+        # 0. Greeting / Help Intent — return friendly static response immediately
+        # Prevents "Execution completed with no data" for conversational queries
+        # -------------------------------------------------------------
+        if GREETING_PATTERNS.match(user_msg.strip()) and not pending_draft:
+            agent_type_greet = state.get("agent") or (context.get("agent") if isinstance(context, dict) else None)
+            if agent_type_greet:
+                agent_type_greet = str(agent_type_greet).lower().strip()
+            if agent_type_greet in ("ticket_analytics", "ticket"):
+                greeting_reply = GREETING_RESPONSE_TICKET
+            elif agent_type_greet in ("project_analytics", "project", "task"):
+                greeting_reply = GREETING_RESPONSE_PROJECT
+            else:
+                greeting_reply = GREETING_RESPONSE_GENERAL
+            elapsed = time.time() - start_time
+            record_node_telemetry(
+                node="dispatcher",
+                latency_ms=int(elapsed * 1000),
+                status="GREETING_HANDLED",
+                output_data={"intent": "general_chat", "reason": "greeting_or_help_query"},
+            )
+            return {
+                "intent": "general_chat",
+                "intent_confidence": 1.0,
+                "messages": [AIMessage(content=greeting_reply)],
+            }
 
         # -------------------------------------------------------------
         # 1. Deterministic Continuation Check (pending_draft exists)
@@ -147,6 +230,91 @@ def make_dispatcher_node(llm):
                 return {"intent": "automation"}
 
         # -------------------------------------------------------------
+        # 1c. Check if user is replying with a bare ticket or task code
+        # -------------------------------------------------------------
+        is_bare_code = bool(re.match(r'^[A-Za-z0-9]+-(?:[A-Za-z]+\d+|\d+)$', user_msg.strip(), re.IGNORECASE))
+        if is_bare_code and len(messages) >= 2:
+            prev_ai_msg = messages[-2]
+            prev_content = str(getattr(prev_ai_msg, "content", "")).lower()
+            if any(w in prev_content for w in ("which ticket", "which task", "which item", "provide the ticket code", "provide the task code", "assign to", "update")):
+                elapsed = time.time() - start_time
+                record_node_telemetry(
+                    node="dispatcher",
+                    latency_ms=int(elapsed * 1000),
+                    status="CODE_REPLY_AUTOMATION_ROUTE",
+                    output_data={"intent": "automation", "reason": "code_reply_to_question"},
+                )
+                return {"intent": "automation"}
+
+        # -------------------------------------------------------------
+        # 1d. Domain Guardrails (Option 2: Strict Domain Boundary)
+        # -------------------------------------------------------------
+        agent_type = state.get("agent") or (context.get("agent") if isinstance(context, dict) else None)
+        if agent_type:
+            agent_type = str(agent_type).lower().strip()
+
+        ticket_keywords = {
+            "ticket", "tickets", "bug", "bugs", "defect", "defects", "issue", "issues", "incident", "incidents"
+        }
+        task_keywords = {
+            "task", "tasks", "project", "projects", "milestone", "milestones", "subtask", "subtasks", "initiative", "initiatives"
+        }
+
+        # Check for explicit word presence using word boundaries
+        has_ticket_kw = any(bool(re.search(rf'\b{kw}\b', user_msg_clean)) for kw in ticket_keywords)
+        has_task_kw = any(bool(re.search(rf'\b{kw}\b', user_msg_clean)) for kw in task_keywords)
+
+        # Check for explicit code patterns
+        # Ticket code: Prefix hyphen and ONLY digits (e.g. PTS-23, TSU-5)
+        # Task code: Prefix hyphen, level letter prefix, then digits (e.g. PTS-P2, TSU-P10, PRJ-T3)
+        # IMPORTANT: The alpha segment MUST be followed by at least one digit to count as a task code.
+        # This prevents hyphenated words like "MEDIUM-priority" or "MEDIMU-priority" from being
+        # misidentified as task codes (they have no trailing digit after the alpha letters).
+        has_ticket_code = bool(re.search(r'\b[A-Za-z0-9]+-\d+\b', user_msg) and not re.search(r'\b[A-Za-z0-9]+-[A-Za-z]+\d+\b', user_msg))
+        has_task_code = bool(re.search(r'\b[A-Za-z0-9]+-[A-Za-z]+\d+\b', user_msg))
+
+        is_pure_ticket_query = (has_ticket_kw or has_ticket_code) and not (has_task_kw or has_task_code)
+        is_pure_task_query = (has_task_kw or has_task_code) and not (has_ticket_kw or has_ticket_code)
+
+        if agent_type in ("project_analytics", "project", "task") and is_pure_ticket_query:
+            elapsed = time.time() - start_time
+            redirect_msg = (
+                "I am your **Project Analyst**, specialized in tasks, milestones, and projects. "
+                "To manage or analyze tickets and bugs, please switch to the **Ticket Analyst** from the agent selector "
+                "or navigate to the Ticket Management page."
+            )
+            record_node_telemetry(
+                node="dispatcher",
+                latency_ms=int(elapsed * 1000),
+                status="DOMAIN_GUARDRAIL_REDIRECT",
+                output_data={"agent": agent_type, "redirect_to": "ticket_analytics", "query": user_msg},
+            )
+            return {
+                "intent": "general_chat",
+                "intent_confidence": 1.0,
+                "messages": [AIMessage(content=redirect_msg)],
+            }
+
+        if agent_type in ("ticket_analytics", "ticket") and is_pure_task_query:
+            elapsed = time.time() - start_time
+            redirect_msg = (
+                "I am your **Ticket Analyst**, specialized in tickets, bugs, and issues. "
+                "To manage or analyze tasks and projects, please switch to the **Project Analyst** from the agent selector "
+                "or navigate to the Task Management page."
+            )
+            record_node_telemetry(
+                node="dispatcher",
+                latency_ms=int(elapsed * 1000),
+                status="DOMAIN_GUARDRAIL_REDIRECT",
+                output_data={"agent": agent_type, "redirect_to": "project_analytics", "query": user_msg},
+            )
+            return {
+                "intent": "general_chat",
+                "intent_confidence": 1.0,
+                "messages": [AIMessage(content=redirect_msg)],
+            }
+
+        # -------------------------------------------------------------
         # 2. Check Feature Flag
         # -------------------------------------------------------------
         automation_enabled = os.getenv("AUTOMATION_ENABLED", "true").lower() in ("true", "1", "yes")
@@ -157,6 +325,7 @@ def make_dispatcher_node(llm):
         # 3. Categorical Intent Classification via LLM (Jev Decisions or Chat)
         # -------------------------------------------------------------
         intent = "analytics"
+        confidence = 1.0
         model_name = getattr(llm, "model_name", None) or os.getenv("ORCHESTRATOR_MODEL", "typesafe/jev-1.14")
         is_decisions_model = "jev" in model_name.lower() or "decisions" in model_name.lower()
 
@@ -188,8 +357,10 @@ def make_dispatcher_node(llm):
                 if resp.status_code == 200:
                     data = resp.json()
                     decision = data.get("answers", {}).get("intent", {}).get("choice")
+                    probs = data.get("answers", {}).get("intent", {}).get("probabilities", {})
                     if decision in ("automation", "analytics", "general_chat"):
                         intent = decision
+                        confidence = float(probs.get(decision, 0.95))
                 else:
                     raise Exception(f"Decisions API returned status {resp.status_code}: {resp.text}")
             else:
@@ -208,6 +379,7 @@ def make_dispatcher_node(llm):
 
                 parsed = json.loads(content)
                 intent = parsed.get("intent", "analytics").lower()
+                confidence = float(parsed.get("confidence", 0.90))
                 if intent not in ("automation", "analytics", "general_chat"):
                     intent = "analytics"
 
@@ -222,6 +394,7 @@ def make_dispatcher_node(llm):
                 intent = "automation"
             else:
                 intent = "analytics"
+            confidence = 0.80
 
         # -------------------------------------------------------------
         # 4. Handle Automation Guardrails & Domain Restrictions
@@ -238,6 +411,7 @@ def make_dispatcher_node(llm):
                 )
                 return {
                     "intent": "general_chat",
+                    "intent_confidence": confidence,
                     "messages": [AIMessage(content=FULL_SCREEN_AUTOMATION_MSG)],
                 }
 
@@ -253,20 +427,27 @@ def make_dispatcher_node(llm):
                 )
                 return {
                     "intent": "general_chat",
+                    "intent_confidence": confidence,
                     "messages": [
                         AIMessage(content="You do not have permission to create tickets. Please contact your workspace administrator to request ticket creation access.")
                     ],
                 }
 
-            return {"intent": "automation"}
+            return {
+                "intent": "automation",
+                "intent_confidence": confidence,
+            }
 
         elapsed = time.time() - start_time
         record_node_telemetry(
             node="dispatcher",
             latency_ms=int(elapsed * 1000),
             status="SUCCESS",
-            output_data={"intent": intent, "userQuery": user_msg},
+            output_data={"intent": intent, "userQuery": user_msg, "confidence": confidence},
         )
-        return {"intent": intent}
+        return {
+            "intent": intent,
+            "intent_confidence": confidence,
+        }
 
     return dispatcher_node

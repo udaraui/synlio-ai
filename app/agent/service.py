@@ -1,6 +1,7 @@
 import os
 import time
 import uuid
+import asyncio
 from typing import Optional, Dict, Any, Tuple, Union, List
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
@@ -150,6 +151,8 @@ def _dispatch_telemetry_payload(
     query: str,
     final_text: str,
     elapsed: float,
+    is_cancelled: bool = False,
+    error_message: Optional[str] = None,
 ):
     """Gathers token counts and node latencies, logs summary to console, and sends telemetry."""
     usage = global_token_usage.get()
@@ -161,8 +164,21 @@ def _dispatch_telemetry_payload(
     node_usage = {k: v for k, v in raw_tracker.items() if not k.startswith("_")}
     cache_tokens = sum(n.get("cacheToken", 0) for n in node_usage.values())
 
-    status = "SUCCESS"
-    if node_usage.get("gate_keeper", {}).get("status") == "INJECTION_BLOCKED":
+    # Find first error message if any
+    node_error_msg = error_message
+    if not node_error_msg:
+        for n in node_usage.values():
+            if n.get("errorMessage"):
+                node_error_msg = n.get("errorMessage")
+                break
+
+    if is_cancelled:
+        status = "STOPPED_BY_USER"
+        if not node_error_msg:
+            node_error_msg = "Generation stopped by user"
+    elif node_error_msg:
+        status = "ERROR"
+    elif node_usage.get("gate_keeper", {}).get("status") == "INJECTION_BLOCKED":
         status = "INJECTION_BLOCKED"
     elif node_usage.get("orchestrator", {}).get("status") == "NO_DOMAIN_FALLBACK":
         status = "NO_DOMAIN_FALLBACK"
@@ -170,13 +186,8 @@ def _dispatch_telemetry_payload(
         status = "ERROR"
     elif any(n.get("status") == "FALLBACK" for n in node_usage.values()):
         status = "FALLBACK"
-
-    # Find first error message if any
-    node_error_msg = None
-    for n in node_usage.values():
-        if n.get("errorMessage"):
-            node_error_msg = n.get("errorMessage")
-            break
+    else:
+        status = "SUCCESS"
 
     # Classify requestType based on executed nodes
     request_type = "analytics"
@@ -208,17 +219,51 @@ def _dispatch_telemetry_payload(
         "errorMessage": node_error_msg,
     }
 
-    # If human inner loop is needed (e.g. incomplete ticket draft awaiting user action), do not create an AI log
+    # If stream was cancelled by user, log explicitly and dispatch telemetry
+    if is_cancelled:
+        print("\n[REQUEST STOPPED BY USER]")
+        print(f"  Request ID: {request_id}")
+        print(f"  Time:       {elapsed:.2f}s")
+        print(f"  Tokens:     {total_tokens:,} (In: {in_tokens:,}, Out: {out_tokens:,}, Cache: {cache_tokens:,})")
+        print(f"  Status:     STOPPED_BY_USER")
+        dispatch_audit_telemetry(payload)
+        return
+
+    # If stream failed with an error, log explicitly and dispatch telemetry
+    if status == "ERROR":
+        print("\n[REQUEST FAILED WITH ERROR]")
+        print(f"  Request ID: {request_id}")
+        print(f"  Time:       {elapsed:.2f}s")
+        print(f"  Tokens:     {total_tokens:,} (In: {in_tokens:,}, Out: {out_tokens:,}, Cache: {cache_tokens:,})")
+        print(f"  Status:     ERROR")
+        print(f"  Error:      {node_error_msg}")
+        dispatch_audit_telemetry(payload)
+        return
+
+    # Check if the AI is actively asking a question (e.g. space or parent project selection pills)
     extract_delta_output = node_usage.get("automation_extract_delta", {}).get("output", {})
-    if extract_delta_output.get("is_complete") is False or "automation_clarify" in node_usage:
+    needs_fields = extract_delta_output.get("needs_fields") or []
+    missing_fields = extract_delta_output.get("missing_fields") or []
+
+    # Disambiguation questions: asking what space or what project to create under
+    has_disambiguation_question = (
+        "automation_clarify" in node_usage
+        or any(f.get("field") in ("taskSpace", "ticketSpace", "parentTask") for f in needs_fields)
+        or ("parentTask" in missing_fields and not extract_delta_output.get("is_complete") and len(needs_fields) > 0)
+        or ("taskSpace" in missing_fields and len(needs_fields) > 0)
+        or ("ticketSpace" in missing_fields and len(needs_fields) > 0)
+    )
+
+    if has_disambiguation_question:
         print("\n[REQUEST WAITING FOR HUMAN INPUT]")
         print(f"  Request ID: {request_id}")
         print(f"  Time:       {elapsed:.2f}s")
         print(f"  Tokens:     {total_tokens:,} (In: {in_tokens:,}, Out: {out_tokens:,}, Cache: {cache_tokens:,})")
         print(f"  Status:     HUMAN_INPUT_NEEDED")
-        print(f"  Audit Log:  Skipped (Human inner loop needed - request not completed)")
+        print(f"  Audit Log:  Skipped (Awaiting space or project disambiguation)")
         return
 
+    # Once the AI fetches and delivers the draft table, AI work is complete -> Enqueue audit log!
     print("\n[REQUEST COMPLETE]")
     print(f"  Request ID: {request_id}")
     print(f"  Time:       {elapsed:.2f}s")
@@ -386,6 +431,8 @@ class InsightAgent:
         config = {"configurable": {"thread_id": thread_id}}
         input_state = self._build_input_state(query, user_id, user_email, company_id, agent, context, scope, history, pending_draft, chat_mode, attachments=attachments)
 
+        is_cancelled = False
+        caught_error: Optional[Exception] = None
         try:
             async for item in self.agent_executor.astream(input_state, config=config, stream_mode=["updates", "messages"]):
                 if not (isinstance(item, tuple) and len(item) == 2):
@@ -430,6 +477,12 @@ class InsightAgent:
                 final_response_parts.append(fallback)
                 yield f"__FINAL__{fallback}"
 
+        except asyncio.CancelledError:
+            is_cancelled = True
+            raise
+        except Exception as e:
+            caught_error = e
+            raise
         finally:
             elapsed = time.time() - start_time
             final_text = "".join(final_response_parts).strip()
@@ -444,6 +497,8 @@ class InsightAgent:
                 query=query,
                 final_text=final_text,
                 elapsed=elapsed,
+                is_cancelled=is_cancelled,
+                error_message=str(caught_error) if caught_error else None,
             )
 
     async def arun(

@@ -148,24 +148,28 @@ def make_tool_executor_node(tools_by_name: Dict[str, Any]):
 def route_after_orchestrator(state: AgentState):
     raw_workers = state.get("active_workers") or []
     active_workers = [w for w in raw_workers if w in VALID_DOMAINS]
-    if not active_workers:
-        return END
-    return active_workers if len(active_workers) > 1 else active_workers[0]
+    target = active_workers if len(active_workers) > 1 else (active_workers[0] if active_workers else END)
+    print(f"[ROUTER: ORCHESTRATOR] Target: {target} | Domains: {active_workers or 'None'}")
+    return target
 
 
 def route_after_domain_worker(state: AgentState) -> str:
     messages = state.get("messages", [])
+    has_tool_call = False
     if messages:
         last_msg = messages[-1]
         if getattr(last_msg, "tool_calls", None):
-            return "tool_executor"
-    return END
+            has_tool_call = True
+    target = "tool_executor" if has_tool_call else END
+    print(f"[ROUTER: DOMAIN_WORKER] Target: {target} | Tool Calls Detected: {has_tool_call}")
+    return target
 
 
 def route_after_tool_executor(state: AgentState) -> str:
-    if state.get("needs_retry"):
-        return "orchestrator"
-    return "formatter"
+    needs_retry = state.get("needs_retry", False)
+    target = "orchestrator" if needs_retry else "formatter"
+    print(f"[ROUTER: TOOL_EXECUTOR] Target: {target} | Retry Required: {needs_retry}")
+    return target
 
 
 def make_analytics_graph(

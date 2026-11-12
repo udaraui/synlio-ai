@@ -268,7 +268,7 @@ async def _send_telemetry_http(payload: Dict[str, Any]):
 
     endpoint = f"{backend_url.rstrip('/')}/chat/internal/audit-telemetry"
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(endpoint, json=payload)
             if resp.status_code in (200, 202):
                 print(f"  Audit Log:  Enqueued to Service Bus!")
@@ -277,7 +277,8 @@ async def _send_telemetry_http(payload: Dict[str, Any]):
                 print(f"  Audit Log:  Backend returned status {resp.status_code}: {resp.text}")
                 print(f"{'='*80}\n")
     except Exception as e:
-        print(f"  Audit Log:  Failed to post audit telemetry to backend ({endpoint}): {e}")
+        err_detail = str(e) if str(e) else f"{type(e).__name__} (request timed out or connection dropped)"
+        print(f"  Audit Log:  Failed to post audit telemetry to backend ({endpoint}): {err_detail}")
         print(f"{'='*80}\n")
 
 

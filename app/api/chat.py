@@ -7,6 +7,44 @@ import asyncio
 
 router = APIRouter()
 
+# Registry of active streaming tasks keyed by conversation_id
+active_chat_tasks: Dict[str, asyncio.Task] = {}
+
+@router.post("/chat/stop")
+async def stop_chat(
+    conversation_id: Optional[str] = Body(None, embed=True),
+    payload: Optional[Dict[str, Any]] = Body(None),
+):
+    conv_id = conversation_id or (payload.get("conversation_id") if payload else None) or (payload.get("conversationId") if payload else None)
+    if conv_id and conv_id in active_chat_tasks:
+        task = active_chat_tasks.get(conv_id)
+        if task and not task.done():
+            task.cancel()
+            print(f"[STOP] Cancelled active AI graph task for conversation: {conv_id}")
+            return {"status": "cancelled", "conversation_id": conv_id}
+    return {"status": "not_found_or_already_done", "conversation_id": conv_id}
+
+def format_context_summary(ctx: Optional[dict]) -> str:
+    """Produces a clean 1-line summary of UI context to prevent console flooding."""
+    if not ctx or not isinstance(ctx, dict):
+        return "None"
+    space_name = ctx.get("taskSpaceName") or ctx.get("ticketSpaceName") or ctx.get("spaceName") or "-"
+    space_id = ctx.get("taskSpaceId") or ctx.get("ticketSpaceId") or ctx.get("spaceId") or "-"
+    prefix = ctx.get("taskSpacePrefix") or ctx.get("ticketSpacePrefix") or ctx.get("spacePrefix") or ctx.get("prefix") or ""
+    page = ctx.get("page") or ctx.get("pageScopeKey") or "-"
+    tasks = ctx.get("tasks") or ctx.get("taskList") or []
+    tickets = ctx.get("tickets") or ctx.get("ticketList") or []
+
+    parts = [f"Space: '{space_name}' (ID: {space_id}, Prefix: {prefix})"]
+    if isinstance(tasks, list) and tasks:
+        parts.append(f"{len(tasks)} tasks in view")
+    if isinstance(tickets, list) and tickets:
+        parts.append(f"{len(tickets)} tickets in view")
+    if page != "-":
+        parts.append(f"Page: {page}")
+    return " | ".join(parts)
+
+
 @router.post("/chat")
 async def chat(
     message: str = Body(...),
@@ -36,7 +74,7 @@ async def chat(
     if agent:
         print(f"  Preset Agent:    {agent}")
     if context:
-        print(f"  Context:         {context}")
+        print(f"  Context Summary: {format_context_summary(context)}")
     if attachments:
         att_summaries = []
         for a in attachments:
@@ -66,6 +104,9 @@ async def chat(
         return StreamingResponse(unavailable_stream(), media_type="text/event-stream")
         
     async def event_stream():
+        current_task = asyncio.current_task()
+        if conversation_id and current_task:
+            active_chat_tasks[conversation_id] = current_task
         try:
             async for chunk in insight_agent.astream_run(
                 message,
@@ -84,10 +125,17 @@ async def chat(
                 attachments=attachments,
             ):
                 yield chunk
+        except asyncio.CancelledError:
+            print(f"[CHAT STOPPED] Stream for conversation {conversation_id} was successfully cancelled.")
+            yield "\n\n[Generation stopped]"
+            raise
         except Exception as e:
             print(f"--- INTERNAL SERVER ERROR ---")
             traceback.print_exc()
             yield f"__REPLACE__Sorry! I encountered an unexpected issue while processing your request!"
             yield f"\nPlease try rephrasing or trying again."
+        finally:
+            if conversation_id and conversation_id in active_chat_tasks:
+                active_chat_tasks.pop(conversation_id, None)
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

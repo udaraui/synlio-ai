@@ -32,10 +32,11 @@ def route_after_gate_keeper(state: AgentState) -> str:
     - If prompt injection flagged -> abort directly to END.
     - Otherwise -> proceed to the dedicated dispatcher node.
     """
-    if state.get("is_injection"):
-        print("[gate_keeper] Malicious prompt flagged. Terminating directly at END.")
-        return END
-    return "dispatcher"
+    is_injection = state.get("is_injection", False)
+    score = state.get("injection_score", 0.0)
+    target = END if is_injection else "dispatcher"
+    print(f"[ROUTER: GATEKEEPER] Target: {target} | Safety Score: {score:.2f} (Violation: {is_injection})")
+    return target
 
 
 def route_after_dispatcher(state: AgentState) -> str:
@@ -46,18 +47,23 @@ def route_after_dispatcher(state: AgentState) -> str:
     - Otherwise (e.g. cancellation or general_chat) -> terminate at END.
     """
     intent = state.get("intent", "analytics")
+    confidence = state.get("intent_confidence", 1.0)
 
     if intent == "automation":
-        return "automation"
-
-    if intent == "analytics":
+        target = "automation"
+    elif intent == "analytics":
         raw_workers = state.get("active_workers") or []
         active_workers = [w for w in raw_workers if w in VALID_DOMAINS]
         if active_workers:
-            return active_workers if len(active_workers) > 1 else active_workers[0]
-        return "orchestrator"
+            target = active_workers if len(active_workers) > 1 else active_workers[0]
+        else:
+            target = "orchestrator"
+    else:
+        target = END
 
-    return END
+    conf_str = f"Confidence: {confidence:.2f} | " if isinstance(confidence, (int, float)) else ""
+    print(f"[ROUTER: DISPATCHER] Intent: {intent} | {conf_str}Target: {target}")
+    return target
 
 
 def create_master_graph(
@@ -87,7 +93,7 @@ def create_master_graph(
     dispatcher = make_dispatcher_node(orchestrator_llm)
 
     # 2. Automation Subgraph as a node
-    automation_subgraph = make_automation_graph(llm)
+    automation_subgraph = make_automation_graph(llm, orchestrator_llm=orchestrator_llm)
 
     # 3. Analytics Nodes
     orchestrator = make_orchestrator_node(orchestrator_llm)

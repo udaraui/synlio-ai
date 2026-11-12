@@ -45,17 +45,101 @@ def make_extract_delta_node(llm):
             recent_chat.append(f"{role}: {msg.content}")
         chat_str = "\n".join(recent_chat)
 
-        # Detect cloning / duplicating existing ticket code (e.g. "create a ticket same as PTS-11")
+        user_msg_lower = user_msg.lower()
+        user_msg_clean = user_msg.strip()
+        is_clone_intent = any(w in user_msg_lower for w in ["clone", "duplicate", "copy", "same as"])
+
+        # Check mentionedItems from context first (highest accuracy)
+        mentioned_items = context.get("mentionedItems") or []
+        mentioned_code = context.get("mentionedCode") or (mentioned_items[0].get("code") if mentioned_items else None)
+
+        # Detect cloning / duplicating existing ticket, task, or project code (e.g. "duplicate PTS-P7" or "same as PTS-11")
         clone_match = re.search(
-            r'\b(?:same\s+as|clone|duplicate|copy\s+of|based\s+on|like)\s+([A-Za-z]{2,10}-\d+)\b',
+            r'\b(?:same\s+as|clone|duplicate|copy\s+of|based\s+on|like)\s+(?:the\s+)?(?:project\s+|task\s+|ticket\s+)?([A-Za-z0-9_-]+-(?:P\d+|\d+(?:-\w+)*))\b',
             f"{user_msg} {chat_str}",
             re.IGNORECASE,
         )
-        source_code = clone_match.group(1).upper() if clone_match else None
+        found_code = None
+        if not clone_match and is_clone_intent:
+            any_code_match = re.search(r'\b([A-Za-z0-9_-]+-(?:P\d+|\d+(?:-\w+)*))\b', user_msg, re.IGNORECASE)
+            if any_code_match:
+                found_code = any_code_match.group(1).upper()
+
+        source_code = (clone_match.group(1).upper() if clone_match else None) or found_code or (mentioned_code.upper() if mentioned_code and is_clone_intent else None)
+
+        is_project_code = bool(
+            (source_code and bool(re.search(r'-P\d+$', source_code, re.IGNORECASE)))
+            or context.get("isProject")
+            or any(m.get("isProject") for m in mentioned_items if m.get("code") == source_code)
+            or ("project" in user_msg_lower and is_clone_intent)
+        )
 
         allowed_spaces = scope.get("allowed_spaces") or []
         current_date = context.get("currentDate") or datetime.utcnow().strftime("%Y-%m-%d")
         timezone = context.get("timezone") or "UTC"
+
+        code_match = re.search(r'\b([A-Za-z0-9_-]+-P\d+)\b', user_msg, re.IGNORECASE)
+        has_task_words = any(w in user_msg_lower for w in ["task", "subtask", "sub-task", "project", "initiative", "folder", "milestone"])
+        has_ticket_words = any(k in user_msg_lower for k in ["ticket", "bug", "issue"])
+        has_task_code = bool(re.search(r'\b[A-Za-z0-9]+-[A-Za-z]+[A-Za-z0-9_-]*\b', user_msg))
+        has_ticket_code = bool(re.search(r'\b[A-Za-z0-9]+-\d+\b', user_msg))
+
+        # Check domain from agent preset, pending draft, context, or message
+        agent = state.get("agent") or (state.get("active_workers")[0] if state.get("active_workers") else None)
+        is_ticket_agent = agent in ("ticket_analytics", "ticket")
+        is_task_agent = agent in ("project_analytics", "task", "project")
+        pending_list = pending_draft if isinstance(pending_draft, list) else ([pending_draft] if isinstance(pending_draft, dict) else [])
+        has_task_in_pending = any(
+            isinstance(item, dict) and (
+                item.get("entityType") == "task" or
+                item.get("parentTaskId") or
+                item.get("parentTaskName") or
+                item.get("hierarchyLevelSequence")
+            )
+            for item in pending_list
+        )
+
+        # Resolve space from active page context if available
+        context_ticket_space_name = (
+            context.get("ticket_space_name")
+            or context.get("ticketSpaceName")
+            or (context.get("spaceName") if context.get("ticket_space_id") or context.get("ticketSpaceId") else None)
+        )
+        context_ticket_space_id = (
+            context.get("ticket_space_id")
+            or context.get("ticketSpaceId")
+        )
+
+        context_task_space_name = (
+            context.get("task_space_name")
+            or context.get("taskSpaceName")
+            or (context.get("spaceName") if context.get("task_space_id") or context.get("taskSpaceId") else None)
+        )
+        context_task_space_id = (
+            context.get("task_space_id")
+            or context.get("taskSpaceId")
+        )
+
+        # Determine domain authority:
+        state_entity_type = state.get("entity_type")
+        if state_entity_type == "task":
+            is_task_domain = True
+        elif state_entity_type == "ticket":
+            is_task_domain = False
+        elif is_ticket_agent:
+            # Strictly ticket domain unless user explicitly targeted a task code
+            is_task_domain = has_task_code and not has_ticket_code
+        elif is_task_agent:
+            # Strictly task domain unless user explicitly targeted a ticket code
+            is_task_domain = not (has_ticket_code and not has_task_code)
+        else:
+            is_task_domain = (
+                has_task_in_pending
+                or has_task_words
+                or bool(context_task_space_id or context_task_space_name)
+                or str(context.get("page") or "").lower() in ["task", "task-management", "tasks"]
+                or str(context.get("pageScopeKey") or "").lower() in ["task", "task-management", "tasks"]
+            ) and not has_ticket_words
 
         # Format system prompt safely without KeyError from JSON example braces
         system_content = (
@@ -80,69 +164,108 @@ def make_extract_delta_node(llm):
             if doc_snippets:
                 doc_str = "\n\n" + "\n\n".join(doc_snippets)
 
-        instruction = "Extract the updated ticket draft (or drafts if multiple items exist):"
+        instruction = "Extract the updated task draft (or drafts if multiple items exist):" if is_task_domain else "Extract the updated ticket draft (or drafts if multiple items exist):"
         if attachments:
-            instruction = (
-                "DOCUMENT TICKET EXTRACTION INSTRUCTIONS:\n"
-                "The user has uploaded one or more documents above. The document may be in ANY format (CSV, spreadsheet, table, Word doc, PDF, or text notes).\n"
-                "1. Read and analyze the entire document content carefully.\n"
-                "2. If the document is tabular or contains multiple items (such as CSV rows, task lists, or issue logs), you MUST extract EVERY SINGLE item/row as a distinct ticket draft. For example, if there are 10 items/rows, your JSON array MUST contain all 10 ticket objects!\n"
-                "3. Map fields intelligently from whatever headers, columns, or keys are used in the document:\n"
-                "   - 'name': The ticket title, summary, issue name, or task subject (MANDATORY).\n"
-                "   - 'description': Detailed context, reproduction steps, or notes.\n"
-                "   - 'assigneeName': Assigned person or owner if specified.\n"
-                "   - 'statusName': Status (e.g. Open, In Progress, Resolved) if specified.\n"
-                "   - 'severityName': Priority or severity (e.g. Low, Medium, High, Critical) if specified.\n"
-                "   - 'ticketTypeName': Type (e.g. Bug, Feature, Task) if specified or inferred.\n"
-                "4. Return ONLY a valid JSON array of ticket objects: [ { \"name\": \"...\", \"description\": \"...\", \"assigneeName\": \"...\", \"severityName\": \"...\", \"statusName\": \"...\", \"ticketTypeName\": \"...\" }, ... ]. Do NOT include conversational filler text."
-            )
+            if is_task_domain:
+                instruction = (
+                    "DOCUMENT TASK EXTRACTION INSTRUCTIONS:\n"
+                    "The user has uploaded one or more documents above. The document may be in ANY format (CSV, spreadsheet, table, Word doc, PDF, or text notes).\n"
+                    "1. Read and analyze the entire document content carefully.\n"
+                    "2. If the document is tabular or contains multiple items (such as CSV rows, task lists, deliverables, or action items), you MUST extract EVERY SINGLE item/row as a distinct task draft. For example, if there are 10 items/rows, your JSON array MUST contain all 10 task objects!\n"
+                    "3. Map fields intelligently from whatever headers, columns, or keys are used in the document:\n"
+                    "   - 'name': The task name, title, summary, or action item (MANDATORY).\n"
+                    "   - 'description': Detailed description, specifications, or notes.\n"
+                    "   - 'assigneeName': Assigned person or owner if specified.\n"
+                    "   - 'statusName': Status (e.g. To Do, In Progress, In Review, Done) if specified.\n"
+                    "   - 'severityName': Priority or severity (e.g. Low, Medium, High, Urgent, Critical) if specified.\n"
+                    "   - 'startDate': Start date (YYYY-MM-DD) if specified or inferred.\n"
+                    "   - 'dueDate': Due date / End date (YYYY-MM-DD) if specified or inferred.\n"
+                    "   - 'estimateEffort': Estimated effort or hours if specified.\n"
+                    "   - 'parentTaskName': Parent project or parent task name if specified in hierarchy.\n"
+                    "   - 'entityType': 'task'\n"
+                    "4. Return ONLY a valid JSON array of task objects: [ { \"name\": \"...\", \"description\": \"...\", \"assigneeName\": \"...\", \"severityName\": \"...\", \"statusName\": \"...\", \"startDate\": \"...\", \"dueDate\": \"...\", \"entityType\": \"task\" }, ... ]. Do NOT include conversational filler text."
+                )
+            else:
+                instruction = (
+                    "DOCUMENT TICKET EXTRACTION INSTRUCTIONS:\n"
+                    "The user has uploaded one or more documents above. The document may be in ANY format (CSV, spreadsheet, table, Word doc, PDF, or text notes).\n"
+                    "1. Read and analyze the entire document content carefully.\n"
+                    "2. If the document is tabular or contains multiple items (such as CSV rows, task lists, or issue logs), you MUST extract EVERY SINGLE item/row as a distinct ticket draft. For example, if there are 10 items/rows, your JSON array MUST contain all 10 ticket objects!\n"
+                    "3. Map fields intelligently from whatever headers, columns, or keys are used in the document:\n"
+                    "   - 'name': The ticket title, summary, issue name, or task subject (MANDATORY).\n"
+                    "   - 'description': Detailed context, reproduction steps, or notes.\n"
+                    "   - 'assigneeName': Assigned person or owner if specified.\n"
+                    "   - 'statusName': Status (e.g. Open, In Progress, Resolved) if specified.\n"
+                    "   - 'severityName': Priority or severity (e.g. Low, Medium, High, Critical) if specified.\n"
+                    "   - 'ticketTypeName': Type (e.g. Bug, Feature, Task) if specified or inferred.\n"
+                    "   - 'entityType': 'ticket'\n"
+                    "4. Return ONLY a valid JSON array of ticket objects: [ { \"name\": \"...\", \"description\": \"...\", \"assigneeName\": \"...\", \"severityName\": \"...\", \"statusName\": \"...\", \"ticketTypeName\": \"...\", \"entityType\": \"ticket\" }, ... ]. Do NOT include conversational filler text."
+                )
+
+        user_msg_lower = user_msg.lower()
+        user_msg_clean = user_msg.strip()
+        code_match = re.search(r'\b([A-Za-z0-9_-]+-P\d+)\b', user_msg, re.IGNORECASE)
+        is_create_as_new = any(p in user_msg_lower for p in ["create as new", "new project", "as a new project", "create new project", "create as a new project"])
+        matched_space = next(
+            (s for s in allowed_spaces if isinstance(s, dict) and s.get("name", "").strip().lower() == user_msg_clean.lower()),
+            None
+        )
+
+        is_direct_disambiguation = (
+            bool(pending_list)
+            and not attachments
+            and (is_create_as_new or code_match or ":" in user_msg_clean or matched_space is not None)
+        )
 
         extracted_data = {}
-        try:
-            prompt_msgs = [
-                SystemMessage(content=system_content),
-                HumanMessage(content=f"Conversation:\n{chat_str}{doc_str}\n\n{instruction}"),
-            ]
-            response = await llm.ainvoke(prompt_msgs)
-            content = response.content.strip()
+        if is_direct_disambiguation:
+            extracted_data = [dict(d) for d in pending_list] if isinstance(pending_draft, list) else dict(pending_draft)
+        else:
+            try:
+                prompt_msgs = [
+                    SystemMessage(content=system_content),
+                    HumanMessage(content=f"Conversation:\n{chat_str}{doc_str}\n\n{instruction}"),
+                ]
+                response = await llm.ainvoke(prompt_msgs)
+                content = response.content.strip()
 
-            # Robust JSON extraction from LLM response
-            if "```" in content:
-                parts = content.split("```")
-                for part in parts:
-                    clean_part = part.strip()
-                    if clean_part.startswith("json"):
-                        clean_part = clean_part[4:].strip()
-                    if clean_part.startswith("{") or clean_part.startswith("["):
+                # Robust JSON extraction from LLM response
+                if "```" in content:
+                    parts = content.split("```")
+                    for part in parts:
+                        clean_part = part.strip()
+                        if clean_part.startswith("json"):
+                            clean_part = clean_part[4:].strip()
+                        if clean_part.startswith("{") or clean_part.startswith("["):
+                            try:
+                                extracted_data = json.loads(clean_part)
+                                break
+                            except Exception:
+                                pass
+
+                if not extracted_data:
+                    idx_brace = content.find("{")
+                    idx_bracket = content.find("[")
+                    start_idx = -1
+                    if idx_brace != -1 and idx_bracket != -1:
+                        start_idx = min(idx_brace, idx_bracket)
+                    elif idx_brace != -1:
+                        start_idx = idx_brace
+                    elif idx_bracket != -1:
+                        start_idx = idx_bracket
+
+                    if start_idx != -1:
                         try:
-                            extracted_data = json.loads(clean_part)
-                            break
+                            extracted_data = json.loads(content[start_idx:].strip().rstrip("`"))
                         except Exception:
-                            pass
-
-            if not extracted_data:
-                idx_brace = content.find("{")
-                idx_bracket = content.find("[")
-                start_idx = -1
-                if idx_brace != -1 and idx_bracket != -1:
-                    start_idx = min(idx_brace, idx_bracket)
-                elif idx_brace != -1:
-                    start_idx = idx_brace
-                elif idx_bracket != -1:
-                    start_idx = idx_bracket
-
-                if start_idx != -1:
-                    try:
-                        extracted_data = json.loads(content[start_idx:].strip().rstrip("`"))
-                    except Exception:
+                            extracted_data = json.loads(content)
+                    else:
                         extracted_data = json.loads(content)
-                else:
-                    extracted_data = json.loads(content)
-        except Exception as e:
-            print(f"[WARN] extract_delta parsing error: {e}")
-            extracted_data = dict(pending_draft) if isinstance(pending_draft, dict) else (pending_draft or {})
+            except Exception as e:
+                print(f"[WARN] extract_delta parsing error: {e}")
+                extracted_data = dict(pending_draft) if isinstance(pending_draft, dict) else (pending_draft or {})
 
-        # Determine if extracted_data is multiple tickets or single ticket
+        # Determine if extracted_data is multiple tickets/tasks or single item
         raw_drafts = []
         if isinstance(extracted_data, list):
             raw_drafts = extracted_data
@@ -151,37 +274,18 @@ def make_extract_delta_node(llm):
                 raw_drafts = extracted_data["drafts"]
             elif "tickets" in extracted_data and isinstance(extracted_data["tickets"], list):
                 raw_drafts = extracted_data["tickets"]
+            elif "tasks" in extracted_data and isinstance(extracted_data["tasks"], list):
+                raw_drafts = extracted_data["tasks"]
             else:
                 raw_drafts = [extracted_data]
         else:
             raw_drafts = [dict(pending_draft)] if (pending_draft and isinstance(pending_draft, dict)) else []
-
-        # Check domain from agent preset, pending draft, context, or message
-        agent = state.get("agent") or (state.get("active_workers")[0] if state.get("active_workers") else None)
-        is_ticket_agent = agent in ("ticket_analytics", "ticket")
-        is_task_agent = agent in ("project_analytics", "task", "project")
-        pending_list = pending_draft if isinstance(pending_draft, list) else ([pending_draft] if isinstance(pending_draft, dict) else [])
-        has_task_in_pending = any(
-            isinstance(item, dict) and (
-                item.get("entityType") == "task" or
-                item.get("parentTaskId") or
-                item.get("parentTaskName") or
-                item.get("hierarchyLevelSequence")
-            )
-            for item in pending_list
-        )
 
         user_msg_clean = user_msg.strip().lower()
         matched_space = next(
             (s for s in allowed_spaces if isinstance(s, dict) and s.get("name", "").strip().lower() == user_msg_clean),
             None
         )
-
-        # Code syntax distinction:
-        # Ticket code: Prefix followed by hyphen and ONLY digits (e.g. PTS-23, SYN-104)
-        # Task code: Prefix followed by hyphen and starts with an English letter (e.g. PTS-P2, PTS-P8, PTS-T1)
-        has_task_code = bool(re.search(r'\b[A-Za-z0-9]+-[A-Za-z]+[A-Za-z0-9_-]*\b', user_msg))
-        has_ticket_code = bool(re.search(r'\b[A-Za-z0-9]+-\d+\b', user_msg))
 
         # If there's an existing single pending_draft and extracted single draft, merge deltas
         if len(pending_list) == 1 and len(raw_drafts) == 1 and isinstance(pending_list[0], dict) and "name" in pending_list[0]:
@@ -254,57 +358,47 @@ def make_extract_delta_node(llm):
         user_msg_lower = user_msg.lower()
         user_msg_clean = user_msg.strip()
         code_match = re.search(r'\b([A-Za-z0-9_-]+-P\d+)\b', user_msg, re.IGNORECASE)
-        is_create_as_new = any(p in user_msg_lower for p in ["create as new", "new project", "as a new project", "create new project"])
+        is_create_as_new = any(p in user_msg_lower for p in ["create as new", "new project", "as a new project", "create new project", "create as a new project"])
 
         if is_create_as_new and raw_drafts:
-            raw_drafts[0]["hierarchyLevelSequence"] = 0
-            raw_drafts[0]["parentTaskId"] = None
-            raw_drafts[0]["parentTaskName"] = None
-            raw_drafts[0]["isCreateNewLevel1"] = True
+            referenced_parent = next((d.get("parentTaskName") for d in raw_drafts if d.get("parentTaskName")), None)
+            if referenced_parent and not any(d.get("name", "").strip().lower() == referenced_parent.strip().lower() for d in raw_drafts):
+                new_project = {
+                    "name": referenced_parent,
+                    "isCreateNewLevel1": True,
+                    "hierarchyLevelSequence": 0,
+                    "entityType": "task",
+                    "taskSpaceId": raw_drafts[0].get("taskSpaceId"),
+                    "taskSpaceName": raw_drafts[0].get("taskSpaceName"),
+                }
+                raw_drafts.insert(0, new_project)
+            elif not any(d.get("isCreateNewLevel1") for d in raw_drafts):
+                if len(raw_drafts) > 1:
+                    new_project = {
+                        "name": "New Project",
+                        "isCreateNewLevel1": True,
+                        "hierarchyLevelSequence": 0,
+                        "entityType": "task",
+                        "taskSpaceId": raw_drafts[0].get("taskSpaceId"),
+                        "taskSpaceName": raw_drafts[0].get("taskSpaceName"),
+                    }
+                    raw_drafts.insert(0, new_project)
+                else:
+                    raw_drafts[0]["hierarchyLevelSequence"] = 0
+                    raw_drafts[0]["parentTaskId"] = None
+                    raw_drafts[0]["parentTaskName"] = None
+                    raw_drafts[0]["isCreateNewLevel1"] = True
+
+            root_name = raw_drafts[0].get("name")
+            for i in range(1, len(raw_drafts)):
+                if not raw_drafts[i].get("parentTaskId"):
+                    raw_drafts[i]["parentTaskName"] = raw_drafts[i].get("parentTaskName") or root_name
+                    raw_drafts[i]["hierarchyLevelSequence"] = 1
         elif (code_match or ":" in user_msg_clean) and raw_drafts:
-            if not raw_drafts[0].get("parentTaskId") and not raw_drafts[0].get("parentTaskName"):
-                raw_drafts[0]["parentTaskName"] = user_msg_clean
-                raw_drafts[0]["hierarchyLevelSequence"] = 2
-        has_task_words = any(w in user_msg_lower for w in ["task", "subtask", "sub-task", "project", "initiative", "folder", "milestone"])
-        has_ticket_words = any(k in user_msg_lower for k in ["ticket", "bug", "issue"])
-
-        # Resolve space from active page context if available
-        context_ticket_space_name = (
-            context.get("ticket_space_name")
-            or context.get("ticketSpaceName")
-            or (context.get("spaceName") if context.get("ticket_space_id") or context.get("ticketSpaceId") else None)
-        )
-        context_ticket_space_id = (
-            context.get("ticket_space_id")
-            or context.get("ticketSpaceId")
-        )
-
-        context_task_space_name = (
-            context.get("task_space_name")
-            or context.get("taskSpaceName")
-            or (context.get("spaceName") if context.get("task_space_id") or context.get("taskSpaceId") else None)
-        )
-        context_task_space_id = (
-            context.get("task_space_id")
-            or context.get("taskSpaceId")
-        )
-
-        # Determine domain authority:
-        if is_ticket_agent:
-            # Strictly ticket domain unless user explicitly targeted a task code
-            is_task_domain = has_task_code and not has_ticket_code
-        elif is_task_agent:
-            # Strictly task domain unless user explicitly targeted a ticket code
-            is_task_domain = not (has_ticket_code and not has_task_code)
-        else:
-            is_task_domain = (
-                has_task_in_pending
-                or has_task_words
-                or bool(context_task_space_id or context_task_space_name)
-                or str(context.get("page") or "").lower() in ["task", "task-management", "tasks"]
-                or str(context.get("pageScopeKey") or "").lower() in ["task", "task-management", "tasks"]
-            ) and not has_ticket_words
-
+            for d in raw_drafts:
+                if not d.get("parentTaskId") and not d.get("parentTaskName"):
+                    d["parentTaskName"] = user_msg_clean
+                    d["hierarchyLevelSequence"] = 1
         for item in raw_drafts:
             if isinstance(item, dict):
                 if is_task_domain:
@@ -353,11 +447,14 @@ def make_extract_delta_node(llm):
 
             if is_task_intent or item.get("entityType") == "task":
                 item["entityType"] = "task"
-                # If user explicitly intended top-level container (e.g. project, initiative, folder)
-                is_explicit_root = any(w in user_msg_lower for w in ["create a project", "create project", "new project", "add project", "make a project", "create an initiative", "create initiative", "new initiative", "add folder", "as a new project", "create as a new project"])
-                if is_explicit_root:
-                    if not item.get("hierarchyLevelSequence"):
-                        item["hierarchyLevelSequence"] = 1
+                # If user explicitly intended top-level container (e.g. project, initiative, folder) or cloning a project
+                is_explicit_root = is_project_code or any(w in user_msg_lower for w in ["create as new", "create as new project", "create a project", "create project", "new project", "add project", "make a project", "create an initiative", "create initiative", "new initiative", "add folder", "as a new project", "create as a new project"])
+                has_batch_root = is_project_code or is_create_as_new or is_explicit_root or any(d.get("isCreateNewLevel1") for d in raw_drafts if isinstance(d, dict))
+                if is_explicit_root or item.get("isCreateNewLevel1"):
+                    item["hierarchyLevelSequence"] = 0
+                    item["parentTaskId"] = None
+                    item["parentTaskName"] = None
+                    item["isCreateNewLevel1"] = True
                 else:
                     # User asked for a task or subtask - never default to Level 1 Project!
                     has_batch_parent = bool(item.get("parentTaskName") and any(
@@ -373,6 +470,16 @@ def make_extract_delta_node(llm):
                         item["hierarchyLevelSequence"] = 2
                         item["hierarchyLevelName"] = "Subtask"
 
+                # If cloning from an existing task/project
+                if source_code:
+                    item["sourceTaskCode"] = source_code
+                    item["cloneChildren"] = bool(re.search(r'all\s+(?:levels?\s+)?children|with\s+(?:all\s+)?children|all\s+tasks|subtasks', user_msg_lower))
+                    mentioned_title = context.get("mentionedTitle")
+                    if is_project_code or (source_code and bool(re.search(r'-P\d+$', source_code, re.IGNORECASE))):
+                        item["name"] = f"{mentioned_title} (Copy)" if mentioned_title else f"{source_code} (Copy)"
+                        item["isCreateNewLevel1"] = True
+                        item["hierarchyLevelSequence"] = 0
+
                 # Task space assignment from context
                 if not item.get("taskSpaceName") and not item.get("taskSpaceId"):
                     if context_task_space_name:
@@ -382,13 +489,13 @@ def make_extract_delta_node(llm):
 
                 clean = dict(item)
 
-                if not clean.get("name"):
+                if not clean.get("name") and not clean.get("sourceTaskCode") and not clean.get("sourceTicketCode"):
                     all_missing_fields.append("name")
 
                 if not clean.get("taskSpaceName") and not clean.get("taskSpaceId"):
                     if "taskSpace" not in all_missing_fields:
                         all_missing_fields.append("taskSpace")
-                elif not is_explicit_root and not clean.get("isCreateNewLevel1") and not clean.get("parentTaskId") and not clean.get("parentTaskName"):
+                elif not has_batch_root and not attachments and not is_explicit_root and not clean.get("isCreateNewLevel1") and not clean.get("parentTaskId") and not clean.get("parentTaskName") and not clean.get("sourceTaskCode"):
                     # Task has a space but user hasn't selected parent project yet and didn't specify creating root
                     if "parentTask" not in all_missing_fields:
                         all_missing_fields.append("parentTask")
@@ -507,12 +614,21 @@ def make_extract_delta_node(llm):
                 summary_text = f"Please provide the missing information: {', '.join(all_missing_fields)}."
         else:
             if is_task_intent:
-                title = clean_drafts[0].get("name") if clean_drafts else "your task"
-                space = clean_drafts[0].get("taskSpaceName") if clean_drafts else None
-                if space:
-                    summary_text = f"I've prepared your task draft '{title}' in '{space}'. Please review the details before proceeding."
+                if source_code:
+                    summary_text = f"I've prepared a draft duplicating **{source_code}** with all its child tasks. Please review the details before proceeding."
+                elif len(clean_drafts) > 1:
+                    space = clean_drafts[0].get("taskSpaceName") if clean_drafts else None
+                    if space:
+                        summary_text = f"I've prepared {len(clean_drafts)} task drafts for you in '{space}'. Please review the details before proceeding."
+                    else:
+                        summary_text = f"I've prepared {len(clean_drafts)} task drafts for you. Please review the details before proceeding."
                 else:
-                    summary_text = f"I've prepared your task draft '{title}'. Please review the details before proceeding."
+                    title = clean_drafts[0].get("name") if clean_drafts else "your task"
+                    space = clean_drafts[0].get("taskSpaceName") if clean_drafts else None
+                    if space:
+                        summary_text = f"I've prepared your task draft '{title}' in '{space}'. Please review the details before proceeding."
+                    else:
+                        summary_text = f"I've prepared your task draft '{title}'. Please review the details before proceeding."
             elif source_code:
                 summary_text = f"I've prepared a new ticket draft based on **{source_code}**. Please review the details before proceeding."
             elif len(clean_drafts) > 1:
@@ -539,6 +655,7 @@ def make_extract_delta_node(llm):
                 "drafts": clean_drafts,
                 "is_complete": is_complete,
                 "missing_fields": all_missing_fields,
+                "needs_fields": needs_fields,
             },
         )
 
