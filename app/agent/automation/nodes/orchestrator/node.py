@@ -83,11 +83,12 @@ def make_automation_orchestrator_node(llm):
         has_creation_intent = any(cv in user_msg_clean for cv in creation_verbs)
 
         mutation_verbs = [
-            "move", "change status", "change the status", "update status", "update the status",
+            "move", "change status", "change the status", "change to", "update status", "update the status",
             "update ticket", "update task", "update", "assign", "reassign", "set severity", "set status",
             "set priority", "rename", "mark as", "mark ticket", "mark task", "close ticket", "close task",
+            "resolve", "resolve ticket", "resolve task", "close", "reopen", "make", "make all",
             "set all", "all tickets", "all tasks", "tickets assigned", "tasks assigned", "tickets for", "tasks for",
-            "move all", "reassign all"
+            "move all", "reassign all", "inprogress", "inprogresss"
         ]
         has_mutation_intent = any(v in user_msg_clean for v in mutation_verbs)
 
@@ -164,22 +165,31 @@ def make_automation_orchestrator_node(llm):
                 route_decision = "CREATE_OR_CLONE"
                 reason = "Heuristic default fallback"
 
-        # --- 5-Layer Cascade for entity_type ---
+        # --- Multi-Layer Cascade for entity_type ---
         mentioned_items = context.get("mentionedItems") or []
         agent = state.get("agent") or context.get("agent")
-        if task_codes and not ticket_codes:
+
+        # 1. Direct User Keyword Check (Highest Priority)
+        user_mentions_ticket = bool(re.search(r'\b(?:tickets?|bugs?|issues?|defects?|incidents?)\b', user_msg_clean))
+        user_mentions_task = bool(re.search(r'\b(?:tasks?|subtasks?|projects?|initiatives?|milestones?)\b', user_msg_clean))
+
+        if user_mentions_ticket and not user_mentions_task:
+            resolved_entity = "ticket"
+        elif user_mentions_task and not user_mentions_ticket:
+            resolved_entity = "task"
+        elif task_codes and not ticket_codes:
             resolved_entity = "task"
         elif ticket_codes and not task_codes:
             resolved_entity = "ticket"
         elif mentioned_items:
             m_type = (mentioned_items[0].get("type") or "").lower()
             resolved_entity = "task" if m_type in ("task", "project") else "ticket"
-        elif entity_decision:
-            resolved_entity = entity_decision
-        elif agent in ("project_analytics", "task", "project"):
-            resolved_entity = "task"
         elif agent in ("ticket_analytics", "ticket"):
             resolved_entity = "ticket"
+        elif agent in ("project_analytics", "task", "project"):
+            resolved_entity = "task"
+        elif entity_decision:
+            resolved_entity = entity_decision
         elif context.get("taskSpaceId") or context.get("task_space_id"):
             resolved_entity = "task"
         elif context.get("ticketSpaceId") or context.get("ticket_space_id"):

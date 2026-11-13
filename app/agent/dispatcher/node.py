@@ -42,11 +42,11 @@ GREETING_PATTERNS = re.compile(
 
 GREETING_RESPONSE_TICKET = (
     "Hi! I'm your **Ticket Analyst** — here's what I can help you with:\n\n"
-    "**🔍 Analytics & Queries**\n"
+    "**Analytics & Queries**\n"
     "- Show open/closed tickets in a space\n"
     "- Filter tickets by severity, assignee, type, or queue\n"
     "- Ticket workload and SLA summaries\n\n"
-    "**⚡ Automation**\n"
+    "**Automation**\n"
     "- Create, update, or bulk-update tickets\n"
     "- Change status, severity, assignee, type, or queue on tickets\n"
     "- Assign high-priority tickets to a team member\n\n"
@@ -55,11 +55,11 @@ GREETING_RESPONSE_TICKET = (
 
 GREETING_RESPONSE_PROJECT = (
     "Hi! I'm your **Project Analyst** — here's what I can help you with:\n\n"
-    "**🔍 Analytics & Queries**\n"
+    "**Analytics & Queries**\n"
     "- Show tasks, milestones, or projects in a space\n"
     "- Filter by status, severity, assignee, or hierarchy level\n"
     "- Workload and progress summaries\n\n"
-    "**⚡ Automation**\n"
+    "**Automation**\n"
     "- Create, update, or bulk-update tasks\n"
     "- Change status, severity, assignee, or dates on tasks\n"
     "- Move all tasks of a certain priority to a new status\n\n"
@@ -68,11 +68,11 @@ GREETING_RESPONSE_PROJECT = (
 
 GREETING_RESPONSE_GENERAL = (
     "Hi! I'm your **Co-Pilot** — here's what I can help you with:\n\n"
-    "**🔍 Analytics & Queries**\n"
+    "**Analytics & Queries**\n"
     "- Show open/closed tickets or tasks in a space\n"
     "- Filter by status, severity, assignee, type, or queue\n"
     "- Workload, SLA, and progress summaries\n\n"
-    "**⚡ Automation**\n"
+    "**Automation**\n"
     "- Create, update, or bulk-update tickets and tasks\n"
     "- Change status, severity, assignee, type, dates, and more\n"
     "- Assign high-priority tickets or move all tasks to a new status\n\n"
@@ -128,7 +128,7 @@ def make_dispatcher_node(llm):
         # 0. Greeting / Help Intent — return friendly static response immediately
         # Prevents "Execution completed with no data" for conversational queries
         # -------------------------------------------------------------
-        if GREETING_PATTERNS.match(user_msg.strip()) and not pending_draft:
+        if GREETING_PATTERNS.match(user_msg.strip()):
             agent_type_greet = state.get("agent") or (context.get("agent") if isinstance(context, dict) else None)
             if agent_type_greet:
                 agent_type_greet = str(agent_type_greet).lower().strip()
@@ -148,6 +148,9 @@ def make_dispatcher_node(llm):
             return {
                 "intent": "general_chat",
                 "intent_confidence": 1.0,
+                "pending_draft": None,
+                "draft": None,
+                "needs_fields": None,
                 "messages": [AIMessage(content=greeting_reply)],
             }
 

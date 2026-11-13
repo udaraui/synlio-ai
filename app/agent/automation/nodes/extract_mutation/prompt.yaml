@@ -24,6 +24,11 @@ system_prompt: |
          - "status": Filter status if mentioned
          - "severity": Filter severity if mentioned
          - "all": true if user said "all tasks", "all tickets", etc.
+     - Title or Fuzzy Name References: If the user refers to an item by its title or name (e.g. "change status of Ticker implementation to in progress", "rename dbt refresh issue as 'DBT job issue'"):
+       * NEVER guess or arbitrarily pick a code from context or history.
+       * Set targets: []
+       * Set filter:
+         - "query": Extracted title or name (e.g. "Ticker implementation", "dbt refresh issue")
      - If no code and no filter criteria can be determined, return targets: [] and filter: null.
 
   2. ENTITY & ACTION DETECTION:
@@ -32,16 +37,20 @@ system_prompt: |
 
   3. HIERARCHY IMMUTABILITY GUARD (CRITICAL):
      - In Synlio, a task's hierarchy level (e.g. Project vs Milestone vs Task) CANNOT be changed once created.
-     - If the user asks to change, convert, or promote/demote the hierarchy level of a task (e.g. "make PRJ-10 a milestone", "turn TSK-4 into a project", "change hierarchy of TSK-1"):
+     - Only trigger this when user explicitly attempts to change the hierarchy structure itself (e.g. "make PRJ-10 a milestone", "turn TSK-4 into a project", "demote task to subtask").
+     - NEVER trigger this for normal status, priority, or assignee updates (e.g. "change status to in progress", "make tasks in progress" are normal field updates, NOT hierarchy changes).
+     - If an actual hierarchy structure change is requested:
        * Set "attemptedHierarchyChange": true
        * Set "summary": "Hierarchy levels are permanently fixed upon task creation and cannot be modified."
        * Leave changes empty.
 
   4. FIELD CHANGES ('changes'):
      Extract only fields the user explicitly requested to CHANGE:
-     - "statusName": New status (e.g. "Done", "In Progress", "In Review", "To Start", "Closed", "Open").
-     - "severityName": New severity/priority (e.g. "Critical", "High", "Medium", "Low").
+     - "ticketTypeName": New ticket type if requested (e.g. "Bug", "CRN", "Service Request", "Maintenance", "Task").
+     - "statusName": New status (e.g. "Done", "In Progress", "In Review", "To Start", "Closed", "Open", "Resolved").
+     - "severityName": New severity/priority (e.g. "Critical", "High", "Medium", "Low", "Blocker").
      - "assigneeName": New assignee to assign to (e.g. "Udara", "Alex", "Me", "Unassigned").
+     - "queueName": New queue / department if requested (e.g. "unresolved", "Default", "Support", "Engineering").
      - "name": New title/name if requested.
      - "description": New description if requested.
      - "dueDate": New due date (ISO string YYYY-MM-DD). Resolve relative dates ("next Friday", "end of month") to YYYY-MM-DD.
@@ -52,6 +61,7 @@ system_prompt: |
   5. SUMMARY ('summary'):
      Generate a concise, professional explanation, e.g.:
      - "I have updated **PRJ-10**: status changed to **In Progress**."
+     - "I have updated **PTS-18**: type changed to **Bug**."
      - "I have moved **PRJ-10** and **PRJ-11** to **In Progress**."
      - If filter without codes: "Which task(s) would you like to update?"
      - If neither codes nor filter given: "Which item would you like to update? Please provide the code (e.g. PRJ-10 or PTS-12)."
@@ -70,6 +80,7 @@ system_prompt: |
       "all": false
     },
     "changes": {
+      "ticketTypeName": null,
       "statusName": "In Progress",
       "severityName": null,
       "assigneeName": null,
