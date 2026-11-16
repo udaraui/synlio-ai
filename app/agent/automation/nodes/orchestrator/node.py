@@ -67,9 +67,25 @@ def make_automation_orchestrator_node(llm):
                 break
         user_msg_clean = user_msg.strip().lower()
 
-        # 2. Extract work item codes (Ticket: direct numbers e.g. PTS-10 vs Task: letter segments e.g. PTS-P7, PTS-P7-T1)
+        # 2. Extract work item codes (Ticket: direct numbers e.g. PTS-10 vs Task: letter segments e.g. PTS-P7, PTS-P7-T1, QTE-E2-S2)
         ticket_codes = [c.strip().upper() for c in re.findall(r'\b[A-Za-z0-9]+-\d+\b', user_msg) if not re.search(r'-P\d+', c, re.IGNORECASE)]
-        task_codes = [c.strip().upper() for c in re.findall(r'\b[A-Za-z0-9]+-[A-Za-z]+[A-Za-z0-9_-]*\b', user_msg)]
+        task_codes = [c.strip().upper() for c in re.findall(r'\b[A-Za-z0-9]+(?:-[A-Za-z]+\d+)+\b', user_msg)]
+
+        # Check for multi-ticket references like "TSU-20 and 21"
+        and_number_match = re.search(r'\b([A-Za-z0-9]+)-(\d+)\s+(?:and|&|,)\s+(?:[A-Za-z0-9]+-)?(\d+)\b', user_msg, re.IGNORECASE)
+        if and_number_match:
+            pfx = and_number_match.group(1).upper()
+            c1 = f"{pfx}-{and_number_match.group(2)}"
+            c2 = f"{pfx}-{and_number_match.group(3)}"
+            if c1 not in ticket_codes: ticket_codes.append(c1)
+            if c2 not in ticket_codes: ticket_codes.append(c2)
+
+        # Check for partial task codes like -E2-S2 or E2-S2
+        partial_task_codes = re.findall(r'(?:^|\s)-?([A-Za-z]+\d+(?:-[A-Za-z]+\d+)+)\b', user_msg)
+        for ptc in partial_task_codes:
+            if ptc.upper() not in task_codes:
+                task_codes.append(ptc.upper())
+
         has_any_code = bool(ticket_codes or task_codes)
 
         # 3. Keyword scanning

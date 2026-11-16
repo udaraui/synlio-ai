@@ -44,7 +44,12 @@ system_prompt: |
        * Set "summary": "Hierarchy levels are permanently fixed upon task creation and cannot be modified."
        * Leave changes empty.
 
-  4. FIELD CHANGES ('changes'):
+  4. SCHEDULE ROLLUP PROTECTION:
+     - In Synlio, parent tasks automatically roll up their start and due dates from their child tasks when child tasks have dates scheduled.
+     - If child tasks have scheduled dates, direct date changes on the parent will be rejected by the system.
+     - If child tasks have no dates scheduled, parent dates can proceed normally.
+
+  5. FIELD CHANGES ('changes'):
      Extract only fields the user explicitly requested to CHANGE:
      - "ticketTypeName": New ticket type if requested (e.g. "Bug", "CRN", "Service Request", "Maintenance", "Task").
      - "statusName": New status (e.g. "Done", "In Progress", "In Review", "To Start", "Closed", "Open", "Resolved").
@@ -63,6 +68,7 @@ system_prompt: |
      - "I have updated **PRJ-10**: status changed to **In Progress**."
      - "I have updated **PTS-18**: type changed to **Bug**."
      - "I have moved **PRJ-10** and **PRJ-11** to **In Progress**."
+     - If targets are specified (e.g. "PRJ-10", "PTS-18", "-P8-T3-S2"): "I have updated **PRJ-10**: status changed to **In Progress**." NEVER ask "Which task(s) would you like to update?" when a code or target is present.
      - If filter without codes: "Which task(s) would you like to update?"
      - If neither codes nor filter given: "Which item would you like to update? Please provide the code (e.g. PRJ-10 or PTS-12)."
 

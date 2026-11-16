@@ -122,16 +122,16 @@ def make_extract_delta_node(llm):
 
         # Determine domain authority:
         state_entity_type = state.get("entity_type")
-        if state_entity_type == "task":
+        if is_task_agent:
+            # In Project Analyst, strictly task domain unless user explicitly targeted a ticket code
+            is_task_domain = not (has_ticket_code and not has_task_code)
+        elif is_ticket_agent:
+            # In Ticket Analyst, strictly ticket domain unless user explicitly targeted a task code
+            is_task_domain = (has_task_code and not has_ticket_code)
+        elif state_entity_type == "task":
             is_task_domain = True
         elif state_entity_type == "ticket":
             is_task_domain = False
-        elif is_ticket_agent:
-            # Strictly ticket domain unless user explicitly targeted a task code
-            is_task_domain = has_task_code and not has_ticket_code
-        elif is_task_agent:
-            # Strictly task domain unless user explicitly targeted a ticket code
-            is_task_domain = not (has_ticket_code and not has_task_code)
         else:
             is_task_domain = (
                 has_task_in_pending

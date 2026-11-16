@@ -233,13 +233,20 @@ def make_dispatcher_node(llm):
                 return {"intent": "automation"}
 
         # -------------------------------------------------------------
-        # 1c. Check if user is replying with a bare ticket or task code
+        # 1c. Check if user is replying with a bare/multiple ticket or task code or selection pill
         # -------------------------------------------------------------
-        is_bare_code = bool(re.match(r'^[A-Za-z0-9]+-(?:[A-Za-z]+\d+|\d+)$', user_msg.strip(), re.IGNORECASE))
-        if is_bare_code and len(messages) >= 2:
+        found_codes = re.findall(r'\b[A-Za-z0-9]+-(?:[A-Za-z]+\d+|\d+)\b', user_msg)
+        is_code_like_reply = bool(
+            found_codes
+            or re.match(r'^-?[A-Za-z0-9]+-[A-Za-z0-9_-]+', user_msg.strip())
+            or re.match(r'^[A-Za-z]+\d+(?:-[A-Za-z]+\d+)*', user_msg.strip())
+            or re.match(r'^all\s*\(\d+\s*(?:tickets?|tasks?)\)', user_msg_clean)
+            or re.match(r'^(?:update|assign|move)\s+[A-Za-z0-9_-]+', user_msg_clean)
+        )
+        if is_code_like_reply and len(messages) >= 2:
             prev_ai_msg = messages[-2]
             prev_content = str(getattr(prev_ai_msg, "content", "")).lower()
-            if any(w in prev_content for w in ("which ticket", "which task", "which item", "provide the ticket code", "provide the task code", "assign to", "update")):
+            if any(w in prev_content for w in ("which ticket", "which task", "which item", "provide the ticket code", "provide the task code", "assign to", "update", "move to", "which unassigned", "which field", "ready to update", "draft", "options")):
                 elapsed = time.time() - start_time
                 record_node_telemetry(
                     node="dispatcher",
@@ -267,19 +274,14 @@ def make_dispatcher_node(llm):
         has_ticket_kw = any(bool(re.search(rf'\b{kw}\b', user_msg_clean)) for kw in ticket_keywords)
         has_task_kw = any(bool(re.search(rf'\b{kw}\b', user_msg_clean)) for kw in task_keywords)
 
-        # Check for explicit code patterns
-        # Ticket code: Prefix hyphen and ONLY digits (e.g. PTS-23, TSU-5)
-        # Task code: Prefix hyphen, level letter prefix, then digits (e.g. PTS-P2, TSU-P10, PRJ-T3)
-        # IMPORTANT: The alpha segment MUST be followed by at least one digit to count as a task code.
-        # This prevents hyphenated words like "MEDIUM-priority" or "MEDIMU-priority" from being
-        # misidentified as task codes (they have no trailing digit after the alpha letters).
-        has_ticket_code = bool(re.search(r'\b[A-Za-z0-9]+-\d+\b', user_msg) and not re.search(r'\b[A-Za-z0-9]+-[A-Za-z]+\d+\b', user_msg))
-        has_task_code = bool(re.search(r'\b[A-Za-z0-9]+-[A-Za-z]+\d+\b', user_msg))
+        # Check for explicit code patterns (Task codes may have multiple segments like QTE-E2-S2)
+        has_ticket_code = bool(re.search(r'\b[A-Za-z0-9]+-\d+\b', user_msg) and not re.search(r'\b[A-Za-z0-9]+(?:-[A-Za-z]+\d+)+\b', user_msg))
+        has_task_code = bool(re.search(r'\b[A-Za-z0-9]+(?:-[A-Za-z]+\d+)+\b', user_msg))
 
         is_pure_ticket_query = (has_ticket_kw or has_ticket_code) and not (has_task_kw or has_task_code)
         is_pure_task_query = (has_task_kw or has_task_code) and not (has_ticket_kw or has_ticket_code)
 
-        if agent_type in ("project_analytics", "project", "task") and is_pure_ticket_query:
+        if agent_type in ("project_analytics", "project", "task") and is_pure_ticket_query and not attachments:
             elapsed = time.time() - start_time
             redirect_msg = (
                 "I am your **Project Analyst**, specialized in tasks, milestones, and projects. "
