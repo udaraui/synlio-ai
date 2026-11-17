@@ -139,8 +139,8 @@ def make_extract_mutation_node(llm):
         # Initialize filter_data early so it is always in scope for severity and status detection
         filter_data = extracted_data.get("filter") or {}
 
-        # Deterministic extraction of target status if missed by LLM
-        user_text_lower = f"{user_msg} {chat_str}".lower()
+        # Deterministic extraction of target status if missed by LLM (strictly from current message, never history)
+        user_text_lower = user_msg.lower()
         is_bulk_all = bool(
             re.search(r'\b(?:all|every)\b.*?\b(?:tasks?|tickets?|items?|projects?|bugs?|issues?)\b', user_msg.lower())
             or filter_data.get("all")
@@ -207,8 +207,8 @@ def make_extract_mutation_node(llm):
             if ctx_code and str(ctx_code).strip().upper() not in CODE_BLACKLIST:
                 targets = [str(ctx_code).strip().upper()]
 
-        # Deterministic extraction of target status if missed by LLM
-        user_text_lower = f"{user_msg} {chat_str}".lower()
+        # Deterministic extraction of target status if missed by LLM (strictly from current message, never history)
+        user_text_lower = user_msg.lower()
         if not clean_changes.get("statusName") and not clean_changes.get("status"):
             status_mappings = [
                 (r'\b(?:to|as|into|set to|mark as|mark|make)\b.*?\bin\s*progress+s*\b|\bin\s*progress+s*\b', "In Progress"),
