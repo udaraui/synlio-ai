@@ -339,9 +339,14 @@ def make_extract_mutation_node(llm):
             is_setting_severity = bool(
                 re.search(rf'\b(?:severity|priority)\b.*?\b(?:to|as|=|into)\s+{sev}\b', user_text_lower)
                 or re.search(rf'\b(?:to|as|into|mark\s+as|set\s+to|change\s+to)\s+{sev}\b', user_text_lower)
+                or re.search(rf'\b(?:make|set|change)\s+(?:it|them|these|those)?\s*{sev}\s+(?:severity|priority)\b', user_text_lower)
             )
             is_filter_severity = bool(
-                re.search(rf'\b{sev}[-\s]+(?:severity|priority)\b', user_text_lower)
+                (
+                    re.search(rf'\b{sev}[-\s]+(?:severity|priority)\b', user_text_lower)
+                    and not re.search(rf'\b(?:make|set|change)\s+(?:it|them|these|those)?\s*{sev}[-\s]+(?:severity|priority)\b', user_text_lower)
+                )
+                or re.search(rf'\b(?:priority|severity)\s+{sev}\s+to\b', user_text_lower)
                 or re.search(rf'\b(?:all|every|open|unresolved)\s+{sev}\b', user_text_lower)
                 or re.search(rf'\b(?:tickets?|tasks?|items?|bugs?|issues?)\s+(?:with|in|having|of)\s+(?:(?:severity|priority)\s+)?{sev}(?:\s+(?:severity|priority))?\b', user_text_lower)
             )
@@ -486,8 +491,17 @@ def make_extract_mutation_node(llm):
         action_name = "UPDATE_TASK" if is_task else "UPDATE_TICKET"
         entity_name = "task" if is_task else "ticket"
 
-        # Guard: if assignee was extracted in changes but user query indicates filter (e.g. "assigned to X"), move to filter
-        if "assigned to" in user_text_lower or "tickets for" in user_text_lower or "tasks for" in user_text_lower:
+        # Guard: if assignee was extracted in changes (or missed) and user query indicates filter ("assigned to X" / "ticket(s) assign to X")
+        filter_assignee_match = re.search(
+            r'\b(?:which\s+(?:are|is)\s+(?:the\s+)?(?:tickets?|tasks?)|(?:all|every)\s+(?:the\s+)?(?:[a-z]+\s+){0,3}(?:tickets?|tasks?))\s+assign(?:ed)?\s+to\s+([A-Za-z0-9_@.\s-]+?)(?:\s+(?:and|in|on|with)\b|$)',
+            user_text_lower,
+        )
+        if filter_assignee_match:
+            if not filter_data.get("assignee"):
+                filter_data["assignee"] = filter_assignee_match.group(1).strip()
+            if clean_changes.get("assigneeName"):
+                clean_changes.pop("assigneeName", None)
+        elif "assigned to" in user_text_lower or "tickets for" in user_text_lower or "tasks for" in user_text_lower:
             if clean_changes.get("assigneeName") and not filter_data.get("assignee"):
                 filter_data["assignee"] = clean_changes.pop("assigneeName")
 
@@ -652,7 +666,7 @@ def make_extract_mutation_node(llm):
                 query_conditions.append({
                     "field": "statusBase",
                     "operator": "neq",
-                    "value": "FINISHED"
+                    "value": "Finished"
                 })
                 query_conditions.append({
                     "field": "statusName",
@@ -663,19 +677,19 @@ def make_extract_mutation_node(llm):
                 query_conditions.append({
                     "field": "statusBase",
                     "operator": "in",
-                    "value": ["TOSTART"]
+                    "value": ["To Start"]
                 })
             elif st_lower in ("in progress", "ongoing", "processing", "in review"):
                 query_conditions.append({
                     "field": "statusBase",
                     "operator": "in",
-                    "value": ["PROCESSING"]
+                    "value": ["Processing"]
                 })
             elif st_lower in ("done", "closed", "resolved", "completed"):
                 query_conditions.append({
                     "field": "statusBase",
                     "operator": "in",
-                    "value": ["FINISHED"]
+                    "value": ["Finished"]
                 })
             else:
                 query_conditions.append({
