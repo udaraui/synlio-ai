@@ -101,12 +101,26 @@ class MutationOption(BaseModel):
     value: str
     actionText: str
 
+class QueryFilterCondition(BaseModel):
+    field: str = Field(..., description="Target property, e.g. statusBase, status, severity, assignee, queue, ticketType, code, name, query, startDate, dueDate")
+    operator: str = Field("eq", description="Condition operator: eq, neq, in, not_in, like, ilike, gte, lte, is_null, is_not_null, fuzzy")
+    value: Any = Field(None, description="Operand value or array of values")
+
+class SemanticQueryPlan(BaseModel):
+    entityType: str = Field("ticket", description="'ticket' or 'task'")
+    targetScope: str = Field("all", description="'all', 'single', 'children', or 'direct'")
+    logic: str = Field("AND", description="'AND' or 'OR'")
+    conditions: List[QueryFilterCondition] = Field(default_factory=list)
+    mutation: Dict[str, Any] = Field(default_factory=dict)
+    summary: str = Field("", description="Conversational summary of query and proposed mutation")
+
 class MutationPayload(BaseModel):
     action: str = "UPDATE_TICKET"  # "UPDATE_TICKET" or "UPDATE_TASK"
     entityType: str = "ticket"     # "ticket" | "task"
     status: str = "READY"          # "READY" | "NEEDS_INPUT"
     targets: List[str] = Field(default_factory=list, description="Target ticket or task codes, e.g. ['PTS-12'] or ['PRJ-10']")
     filter: Optional[Dict[str, Any]] = None
+    queryPlan: Optional[SemanticQueryPlan] = None
     changes: Dict[str, Any] = Field(default_factory=dict)
     options: List[MutationOption] = Field(default_factory=list)
     summary: str = Field("", description="Conversational explanation of changes")
