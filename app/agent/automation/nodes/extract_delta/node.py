@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Dict, Any, List
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from app.agent.automation.state import AutomationState
-from app.agent.automation.schema import TicketDraft
+from app.agent.automation.schema import TicketDraft, DeltaExtractionResult
 from app.agent.telemetry import record_node_telemetry
 
 _YAML_PATH = Path(__file__).parent / "prompt.yaml"
@@ -22,11 +22,50 @@ except Exception as e:
 EXTRACT_DELTA_PROMPT_TEMPLATE = _CONFIG.get("system_prompt", "Extract ticket parameters.")
 
 
+def _parse_delta_json_fallback(content: str) -> Any:
+    """Parse raw JSON (object or array) when structured output is unavailable."""
+    if "```" in content:
+        for part in content.split("```"):
+            clean_part = part.strip()
+            if clean_part.startswith("json"):
+                clean_part = clean_part[4:].strip()
+            if clean_part.startswith("{") or clean_part.startswith("["):
+                try:
+                    return json.loads(clean_part)
+                except Exception:
+                    pass
+
+    idx_brace = content.find("{")
+    idx_bracket = content.find("[")
+    start_idx = -1
+    if idx_brace != -1 and idx_bracket != -1:
+        start_idx = min(idx_brace, idx_bracket)
+    elif idx_brace != -1:
+        start_idx = idx_brace
+    elif idx_bracket != -1:
+        start_idx = idx_bracket
+
+    if start_idx != -1:
+        try:
+            return json.loads(content[start_idx:].strip().rstrip("`"))
+        except Exception:
+            return json.loads(content)
+    return json.loads(content)
+
+
 def make_extract_delta_node(llm):
     """
     Creates the extract_delta node.
-    Extracts ticket attributes, infers types/severity, resolves dates, and merges deltas.
+    Uses Pydantic structured output (`with_structured_output`) when available,
+    with fallback to raw JSON parsing.
     """
+    structured_llm = None
+    if hasattr(llm, "with_structured_output"):
+        try:
+            structured_llm = llm.with_structured_output(DeltaExtractionResult)
+        except Exception:
+            structured_llm = None
+
     async def extract_delta_node(state: AutomationState) -> Dict[str, Any]:
         start_time = time.time()
         messages = state.get("messages", [])
@@ -217,50 +256,30 @@ def make_extract_delta_node(llm):
             and (is_create_as_new or code_match or ":" in user_msg_clean or matched_space is not None)
         )
 
-        extracted_data = {}
+        extracted_data: Any = {}
         if is_direct_disambiguation:
             extracted_data = [dict(d) for d in pending_list] if isinstance(pending_draft, list) else dict(pending_draft)
         else:
+            prompt_msgs = [
+                SystemMessage(content=system_content),
+                HumanMessage(content=f"Conversation:\n{chat_str}{doc_str}\n\n{instruction}"),
+            ]
             try:
-                prompt_msgs = [
-                    SystemMessage(content=system_content),
-                    HumanMessage(content=f"Conversation:\n{chat_str}{doc_str}\n\n{instruction}"),
-                ]
-                response = await llm.ainvoke(prompt_msgs)
-                content = response.content.strip()
-
-                # Robust JSON extraction from LLM response
-                if "```" in content:
-                    parts = content.split("```")
-                    for part in parts:
-                        clean_part = part.strip()
-                        if clean_part.startswith("json"):
-                            clean_part = clean_part[4:].strip()
-                        if clean_part.startswith("{") or clean_part.startswith("["):
-                            try:
-                                extracted_data = json.loads(clean_part)
-                                break
-                            except Exception:
-                                pass
-
-                if not extracted_data:
-                    idx_brace = content.find("{")
-                    idx_bracket = content.find("[")
-                    start_idx = -1
-                    if idx_brace != -1 and idx_bracket != -1:
-                        start_idx = min(idx_brace, idx_bracket)
-                    elif idx_brace != -1:
-                        start_idx = idx_brace
-                    elif idx_bracket != -1:
-                        start_idx = idx_bracket
-
-                    if start_idx != -1:
-                        try:
-                            extracted_data = json.loads(content[start_idx:].strip().rstrip("`"))
-                        except Exception:
-                            extracted_data = json.loads(content)
-                    else:
-                        extracted_data = json.loads(content)
+                if structured_llm is not None:
+                    try:
+                        structured_res = await structured_llm.ainvoke(prompt_msgs)
+                        if hasattr(structured_res, "drafts"):
+                            extracted_data = [d.model_dump(exclude_none=True) for d in structured_res.drafts]
+                        elif hasattr(structured_res, "model_dump"):
+                            extracted_data = structured_res.model_dump(exclude_none=True)
+                        elif isinstance(structured_res, (dict, list)):
+                            extracted_data = structured_res
+                    except Exception:
+                        response = await llm.ainvoke(prompt_msgs)
+                        extracted_data = _parse_delta_json_fallback(response.content.strip())
+                else:
+                    response = await llm.ainvoke(prompt_msgs)
+                    extracted_data = _parse_delta_json_fallback(response.content.strip())
             except Exception as e:
                 print(f"[WARN] extract_delta parsing error: {e}")
                 extracted_data = dict(pending_draft) if isinstance(pending_draft, dict) else (pending_draft or {})

@@ -22,6 +22,8 @@ system_prompt: |
          - "assignee": Target person's name (e.g. "Reshan", "me", "Udara", "Unassigned")
          - "status": Source filter status if mentioned (e.g. "Open", "In Progress")
          - "severity": Source filter severity/priority if mentioned (e.g. "High", "Medium", "Low", "Critical")
+         - "hierarchyLevelName": Configured hierarchy level name ONLY when user targets a specific level type (e.g. "Project", "Epic", "Initiative", "Milestone", "Story", "Subtask"). Leave null for generic "tasks" or "items".
+         - "hierarchyLevelPosition": 1-based hierarchy level position when specified structurally: 1 for "root", "root level", "root task", "top level", "level 1"; 2 for "child of root", "second level", "2nd level", "level 2"; 3 for "third level", "level 3", etc.
          - "all": true if user said "all", "every", etc.
      - If NO code and NO filter criteria are in the user's message, check the active context (context.taskCode, context.ticketCode, context.code). If an active single item is being viewed, use that code.
      - Title or Fuzzy Name References: If the user refers to an item by its title or name (e.g. "change status of Ticker implementation to in progress", "rename dbt refresh issue as 'DBT job issue'"):
@@ -58,8 +60,12 @@ system_prompt: |
      - "queueName": New queue / department if requested (e.g. "unresolved", "Default", "Support", "Engineering").
      - "name": New title/name if requested.
      - "description": New description if requested.
-     - "dueDate": New due date (ISO string YYYY-MM-DD). Resolve relative dates ("next Friday", "end of month") to YYYY-MM-DD.
-     - "startDate": New start date (ISO string YYYY-MM-DD).
+     - "dueDate": New absolute due date (ISO string YYYY-MM-DD). Resolve relative calendar dates ("next Friday", "end of month") to YYYY-MM-DD. Leave null if using dueDateOffsetDays.
+     - "startDate": New absolute start date (ISO string YYYY-MM-DD). Leave null if using startDateOffsetDays.
+     - "startDateOffsetDays": Signed integer day offset when start date is relative (e.g. -12 for "12 days before the end date", +2 for "move start date forward by 2 days").
+     - "startDateRelativeTo": "dueDate" (if relative to end/due date) or "startDate" (if shifting current start date).
+     - "dueDateOffsetDays": Signed integer day offset when due/end date is relative (e.g. +2 for "move due date forward by 2 days", +5 for "5 days after start date").
+     - "dueDateRelativeTo": "dueDate" (if shifting current due date) or "startDate" (if relative to start date).
      - "estimateEffort": New effort in hours (e.g. "8 hours" -> 8).
      Leave any unmentioned fields as null.
 

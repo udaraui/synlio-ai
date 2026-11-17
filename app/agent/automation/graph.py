@@ -44,7 +44,7 @@ def make_automation_graph(llm, orchestrator_llm=None):
 
     automation_orchestrator_node = make_automation_orchestrator_node(orchestrator_llm)
     extract_delta_node = make_extract_delta_node(llm)
-    finalize_node = make_finalize_node(llm)
+    finalize_node = make_finalize_node()
     extract_mutation_node = make_extract_mutation_node(llm)
 
     workflow.add_node("automation_orchestrator", automation_orchestrator_node)

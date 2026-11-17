@@ -94,6 +94,98 @@ TASK_AUTOMATION_MSG = (
 )
 
 
+def _check_automation_continuation(
+    user_msg: str,
+    user_msg_clean: str,
+    pending_draft: Any,
+    chat_mode: str,
+    messages: list,
+    start_time: float,
+) -> Dict[str, Any] | None:
+    """Handle active automation draft continuation, cancellation, or code-reply routing."""
+    if pending_draft:
+        if chat_mode == "full":
+            return {
+                "intent": "general_chat",
+                "pending_draft": None,
+                "draft": None,
+                "needs_fields": None,
+                "messages": [AIMessage(content=FULL_SCREEN_AUTOMATION_MSG)],
+            }
+
+        if any(k in user_msg_clean for k in CANCEL_KEYWORDS):
+            elapsed = time.time() - start_time
+            record_node_telemetry(
+                node="dispatcher",
+                latency_ms=int(elapsed * 1000),
+                status="DRAFT_CANCELLED",
+                output_data={"intent": "general_chat", "action": "cancel_draft"},
+            )
+            return {
+                "intent": "general_chat",
+                "pending_draft": None,
+                "draft": None,
+                "needs_fields": None,
+                "messages": [AIMessage(content="I've cancelled that draft. What else can I help you with?")],
+            }
+
+        has_explicit_ticket_code = bool(re.search(r'\b[A-Za-z]{2,10}-\d+\b', user_msg))
+        is_mutation_override = has_explicit_ticket_code or any(
+            v in user_msg_clean
+            for v in ("move ticket", "change status", "update status", "update ticket", "close ticket", "reopen ticket")
+        )
+        if is_mutation_override:
+            elapsed = time.time() - start_time
+            record_node_telemetry(
+                node="dispatcher",
+                latency_ms=int(elapsed * 1000),
+                status="MUTATION_OVERRIDE",
+                output_data={"intent": "automation", "reason": "mutation_overrides_pending_draft"},
+            )
+            return {
+                "intent": "automation",
+                "pending_draft": None,
+                "draft": None,
+                "needs_fields": None,
+            }
+
+        elapsed = time.time() - start_time
+        record_node_telemetry(
+            node="dispatcher",
+            latency_ms=int(elapsed * 1000),
+            status="CONTINUATION_BYPASS",
+            output_data={"intent": "automation", "reason": "pending_draft_present"},
+        )
+        return {"intent": "automation"}
+
+    found_codes = re.findall(r'\b[A-Za-z0-9]+-(?:[A-Za-z]+\d+|\d+)\b', user_msg)
+    is_code_like_reply = bool(
+        found_codes
+        or re.match(r'^-?[A-Za-z0-9]+-[A-Za-z0-9_-]+', user_msg.strip())
+        or re.match(r'^[A-Za-z]+\d+(?:-[A-Za-z]+\d+)*', user_msg.strip())
+        or re.match(r'^all\s*\(\d+\s*(?:tickets?|tasks?)\)', user_msg_clean)
+        or re.match(r'^(?:update|assign|move)\s+[A-Za-z0-9_-]+', user_msg_clean)
+    )
+    if is_code_like_reply and len(messages) >= 2:
+        prev_content = str(getattr(messages[-2], "content", "")).lower()
+        if any(w in prev_content for w in (
+            "which ticket", "which task", "which item", "provide the ticket code",
+            "provide the task code", "verify the task code", "verify the ticket code",
+            "could not find", "not found", "assign to", "update", "move to",
+            "which unassigned", "which field", "ready to update", "draft", "options",
+        )):
+            elapsed = time.time() - start_time
+            record_node_telemetry(
+                node="dispatcher",
+                latency_ms=int(elapsed * 1000),
+                status="CODE_REPLY_AUTOMATION_ROUTE",
+                output_data={"intent": "automation", "reason": "code_reply_to_question"},
+            )
+            return {"intent": "automation"}
+
+    return None
+
+
 def make_dispatcher_node(llm):
     """
     Creates the Dispatcher Node.
@@ -155,73 +247,10 @@ def make_dispatcher_node(llm):
             }
 
         # -------------------------------------------------------------
-        # 1. Deterministic Continuation Check (pending_draft exists)
-        # -------------------------------------------------------------
-        if pending_draft:
-            if chat_mode == "full":
-                return {
-                    "intent": "general_chat",
-                    "pending_draft": None,
-                    "draft": None,
-                    "needs_fields": None,
-                    "messages": [AIMessage(content=FULL_SCREEN_AUTOMATION_MSG)],
-                }
-
-            # Check for user cancellation escape hatch
-            if any(k in user_msg_clean for k in CANCEL_KEYWORDS):
-                elapsed = time.time() - start_time
-                record_node_telemetry(
-                    node="dispatcher",
-                    latency_ms=int(elapsed * 1000),
-                    status="DRAFT_CANCELLED",
-                    output_data={"intent": "general_chat", "action": "cancel_draft"},
-                )
-                return {
-                    "intent": "general_chat",
-                    "pending_draft": None,
-                    "draft": None,
-                    "needs_fields": None,
-                    "messages": [AIMessage(content="I've cancelled that draft. What else can I help you with?")],
-                }
-
-            # If user message contains explicit mutation actions WITH a ticket code, or explicit move/status verbs, override pending_draft
-            has_explicit_ticket_code = bool(re.search(r'\b[A-Za-z]{2,10}-\d+\b', user_msg))
-            is_mutation_override = has_explicit_ticket_code or any(
-                v in user_msg_clean
-                for v in (
-                    "move ticket", "change status", "update status", "update ticket", "close ticket", "reopen ticket"
-                )
-            )
-
-            if is_mutation_override:
-                elapsed = time.time() - start_time
-                record_node_telemetry(
-                    node="dispatcher",
-                    latency_ms=int(elapsed * 1000),
-                    status="MUTATION_OVERRIDE",
-                    output_data={"intent": "automation", "reason": "mutation_overrides_pending_draft"},
-                )
-                return {
-                    "intent": "automation",
-                    "pending_draft": None,
-                    "draft": None,
-                    "needs_fields": None,
-                }
-
-            elapsed = time.time() - start_time
-            record_node_telemetry(
-                node="dispatcher",
-                latency_ms=int(elapsed * 1000),
-                status="CONTINUATION_BYPASS",
-                output_data={"intent": "automation", "reason": "pending_draft_present"},
-            )
-            return {"intent": "automation"}
-
-        # -------------------------------------------------------------
-        # 1b. Document Attachment Check in Side Panel
+        # 1. Document Attachment Check in Side Panel & Automation Continuation
         # -------------------------------------------------------------
         attachments = state.get("attachments") or []
-        if attachments and chat_mode == "panel":
+        if not pending_draft and attachments and chat_mode == "panel":
             if not any(k in user_msg_clean for k in ("chart", "graph", "trend", "metric", "statistic")):
                 elapsed = time.time() - start_time
                 record_node_telemetry(
@@ -232,29 +261,16 @@ def make_dispatcher_node(llm):
                 )
                 return {"intent": "automation"}
 
-        # -------------------------------------------------------------
-        # 1c. Check if user is replying with a bare/multiple ticket or task code or selection pill
-        # -------------------------------------------------------------
-        found_codes = re.findall(r'\b[A-Za-z0-9]+-(?:[A-Za-z]+\d+|\d+)\b', user_msg)
-        is_code_like_reply = bool(
-            found_codes
-            or re.match(r'^-?[A-Za-z0-9]+-[A-Za-z0-9_-]+', user_msg.strip())
-            or re.match(r'^[A-Za-z]+\d+(?:-[A-Za-z]+\d+)*', user_msg.strip())
-            or re.match(r'^all\s*\(\d+\s*(?:tickets?|tasks?)\)', user_msg_clean)
-            or re.match(r'^(?:update|assign|move)\s+[A-Za-z0-9_-]+', user_msg_clean)
+        continuation_res = _check_automation_continuation(
+            user_msg=user_msg,
+            user_msg_clean=user_msg_clean,
+            pending_draft=pending_draft,
+            chat_mode=chat_mode,
+            messages=messages,
+            start_time=start_time,
         )
-        if is_code_like_reply and len(messages) >= 2:
-            prev_ai_msg = messages[-2]
-            prev_content = str(getattr(prev_ai_msg, "content", "")).lower()
-            if any(w in prev_content for w in ("which ticket", "which task", "which item", "provide the ticket code", "provide the task code", "assign to", "update", "move to", "which unassigned", "which field", "ready to update", "draft", "options")):
-                elapsed = time.time() - start_time
-                record_node_telemetry(
-                    node="dispatcher",
-                    latency_ms=int(elapsed * 1000),
-                    status="CODE_REPLY_AUTOMATION_ROUTE",
-                    output_data={"intent": "automation", "reason": "code_reply_to_question"},
-                )
-                return {"intent": "automation"}
+        if continuation_res is not None:
+            return continuation_res
 
         # -------------------------------------------------------------
         # 1d. Domain Guardrails (Option 2: Strict Domain Boundary)

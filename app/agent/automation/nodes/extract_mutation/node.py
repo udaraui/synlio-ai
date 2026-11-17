@@ -4,10 +4,16 @@ import json
 import yaml
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from app.agent.automation.state import AutomationState
-from app.agent.automation.schema import MutationPayload, TicketMutationChanges, SemanticQueryPlan, QueryFilterCondition
+from app.agent.automation.schema import (
+    MutationPayload,
+    TicketMutationChanges,
+    SemanticQueryPlan,
+    QueryFilterCondition,
+    MutationExtractionResult,
+)
 from app.agent.telemetry import record_node_telemetry
 
 _YAML_PATH = Path(__file__).parent / "prompt.yaml"
@@ -21,12 +27,53 @@ except Exception as e:
 EXTRACT_MUTATION_PROMPT_TEMPLATE = _CONFIG.get("system_prompt", "Extract ticket mutation parameters.")
 
 
+def _parse_json_fallback(content: str) -> Dict[str, Any]:
+    """Parse raw JSON (optionally wrapped in markdown fences) when structured output is unavailable."""
+    if "```" in content:
+        for part in content.split("```"):
+            clean_part = part.strip()
+            if clean_part.startswith("json"):
+                clean_part = clean_part[4:].strip()
+            try:
+                parsed = json.loads(clean_part)
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                continue
+        return {}
+    parsed = json.loads(content)
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _clean_query_noise(q: str) -> str:
+    """Strip generic entity/action words from fuzzy title queries."""
+    if not q:
+        return ""
+    cleaned = str(q).strip().strip('"\'')
+    cleaned = re.sub(r'^(?:the|task|tasks|ticket|tickets|bug|bugs|issue|issues)\s+', '', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(
+        r'\s+(?:ticket\s+title|ticket\s+type|ticket\s+status|task\s+title|task\s+status|'
+        r'ticket|tickets|task|tasks|title|status|type|queue)(?:\s+change)?$',
+        '',
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    return cleaned.strip()
+
+
 def make_extract_mutation_node(llm):
     """
     Creates the extract_mutation node.
-    Extracts target ticket codes and requested field changes (status, assignee, severity, type, title, description, etc.)
-    and outputs a structured mutation_payload without blocking for user confirmation.
+    Uses Pydantic structured output (`with_structured_output`) as primary extraction
+    and applies deterministic guardrails for codes, hierarchy immutability, and filters.
     """
+    structured_llm = None
+    if hasattr(llm, "with_structured_output"):
+        try:
+            structured_llm = llm.with_structured_output(MutationExtractionResult)
+        except Exception:
+            structured_llm = None
+
     async def extract_mutation_node(state: AutomationState) -> Dict[str, Any]:
         start_time = time.time()
         messages = state.get("messages", [])
@@ -59,30 +106,26 @@ def make_extract_mutation_node(llm):
             .replace("{current_date}", str(current_date))
         )
 
-        extracted_data = {}
+        extracted_data: Dict[str, Any] = {}
         llm_error = None
+        prompt_msgs = [
+            SystemMessage(content=system_content),
+            HumanMessage(content=f"Conversation:\n{chat_str}\n\nExtract the requested ticket or task mutation:"),
+        ]
         try:
-            prompt_msgs = [
-                SystemMessage(content=system_content),
-                HumanMessage(content=f"Conversation:\n{chat_str}\n\nExtract the requested ticket or task mutation:"),
-            ]
-            response = await llm.ainvoke(prompt_msgs)
-            content = response.content.strip()
-
-            # Clean JSON markdown if wrapped
-            if "```" in content:
-                parts = content.split("```")
-                for part in parts:
-                    clean_part = part.strip()
-                    if clean_part.startswith("json"):
-                        clean_part = clean_part[4:].strip()
-                    try:
-                        extracted_data = json.loads(clean_part)
-                        break
-                    except Exception:
-                        continue
+            if structured_llm is not None:
+                try:
+                    structured_res = await structured_llm.ainvoke(prompt_msgs)
+                    if hasattr(structured_res, "model_dump"):
+                        extracted_data = structured_res.model_dump(exclude_none=True)
+                    elif isinstance(structured_res, dict):
+                        extracted_data = structured_res
+                except Exception:
+                    response = await llm.ainvoke(prompt_msgs)
+                    extracted_data = _parse_json_fallback(response.content.strip())
             else:
-                extracted_data = json.loads(content)
+                response = await llm.ainvoke(prompt_msgs)
+                extracted_data = _parse_json_fallback(response.content.strip())
         except Exception as e:
             print(f"[ERROR] extract_mutation LLM call failed: {e}")
             llm_error = str(e)
@@ -141,8 +184,19 @@ def make_extract_mutation_node(llm):
             if v is not None and str(v).strip() != "" and str(v).lower() != "null":
                 clean_changes[k] = v
 
+        if "startDateOffsetDays" in clean_changes:
+            clean_changes.pop("startDate", None)
+        if "dueDateOffsetDays" in clean_changes:
+            clean_changes.pop("dueDate", None)
+
         # Initialize filter_data early so it is always in scope for severity and status detection
         filter_data = dict(extracted_data.get("filter") or {})
+        if filter_data.get("query"):
+            cleaned_q = _clean_query_noise(str(filter_data["query"]))
+            if cleaned_q:
+                filter_data["query"] = cleaned_q
+            else:
+                filter_data.pop("query", None)
 
         # Deterministic extraction of target status if missed by LLM (strictly from current message, never history)
         user_text_lower = user_msg.lower()
@@ -153,27 +207,29 @@ def make_extract_mutation_node(llm):
         if is_bulk_all:
             filter_data["all"] = True
 
-        # Check if user message explicitly references an item by title/name
-        # e.g. "change status of Ticker implementation to in progress", "rename dbt refresh issue as 'DBT job issue'",
-        # "ssss task assign to me", "update start date of validate customer import 12 days before the end date"
+        # Check if user message explicitly references an item by title/name when LLM didn't populate filter.query
         title_ref_match = None
-        if not is_bulk_all:
+        if not is_bulk_all and not user_msg_codes and not filter_data.get("query"):
             title_ref_match = re.search(
                 r'\b(?:change\s+status\s+of|update\s+status\s+of|status\s+of|rename|update|move|mark|assign\s+(?:task\s+|ticket\s+)?)\s*([A-Za-z0-9_\s-]+?)\s+(?:to|as|into|status)\b',
                 user_msg,
                 re.IGNORECASE,
             )
             if not title_ref_match:
-                # Pattern: "<title> task assign to <user>" or "<title> assign to <user>"
+                title_ref_match = re.search(
+                    r'\b(?:task|ticket|bug|issue)\s+["\']([^"\']+)["\']',
+                    user_msg,
+                    re.IGNORECASE,
+                )
+            if not title_ref_match:
                 title_ref_match = re.search(
                     r'\b([A-Za-z0-9_\s-]+?)\s+(?:task\s+|ticket\s+)?assign(?:\s+it)?\s+to\s+([A-Za-z0-9_\s-]+)\b',
                     user_msg,
                     re.IGNORECASE,
                 )
             if not title_ref_match:
-                # Pattern: "update start/due date of <title> to/before/after <date>"
                 title_ref_match = re.search(
-                    r'\b(?:update\s+(?:start|due|end)?\s*date\s+of|start\s+date\s+of|due\s+date\s+of)\s+([A-Za-z0-9_\s-]+?)(?:\s+\d+|\s+to|\s+before|\s+after|$)',
+                    r'\b(?:(?:update|move|shift|push)\s+(?:the\s+)?(?:start|due|end)?\s*dates?\s+of|(?:start|due|end)\s*dates?\s+of)\s+([A-Za-z0-9_\s-]+?)(?:\s+\d+|\s+to|\s+before|\s+after|\s+forward|\s+back|\s+by|$)',
                     user_msg,
                     re.IGNORECASE,
                 )
@@ -188,14 +244,13 @@ def make_extract_mutation_node(llm):
                 return False
             return True
 
+        extracted_title_cand = _clean_query_noise(title_ref_match.group(1)) if title_ref_match else ""
         has_title_reference = bool(
-            (title_ref_match and _is_valid_title_candidate(title_ref_match.group(1)))
+            (extracted_title_cand and _is_valid_title_candidate(extracted_title_cand))
             or filter_data.get("query")
         )
-        if has_title_reference and not filter_data.get("query") and title_ref_match:
-            cand = title_ref_match.group(1).strip()
-            if _is_valid_title_candidate(cand):
-                filter_data["query"] = cand
+        if has_title_reference and not filter_data.get("query") and extracted_title_cand and _is_valid_title_candidate(extracted_title_cand):
+            filter_data["query"] = extracted_title_cand
 
         # Check if user query contains any filter criteria (query, bulk, unassigned, status, severity)
         has_filter_criteria = bool(
@@ -320,6 +375,32 @@ def make_extract_mutation_node(llm):
                     status_map = {"open": "Open", "closed": "Closed", "resolved": "Resolved", "todo": "To Do", "to do": "To Do", "in progress": "In Progress"}
                     filter_data["status"] = status_map.get(st.lower(), st.capitalize())
 
+        # Deterministic hierarchy level filter fallback (when not already populated by structured LLM)
+        if not filter_data.get("hierarchyLevelPosition") and not filter_data.get("hierarchyLevelName"):
+            if re.search(r'\b(?:child(?:ren)?\s+of\s+(?:the\s+)?root(?:\s+tasks?)?|second\s*level|2nd\s*level|level\s*2)\b', user_text_lower):
+                filter_data["hierarchyLevelPosition"] = 2
+            elif re.search(r'\b(?:third\s*level|3rd\s*level|level\s*3)\b', user_text_lower):
+                filter_data["hierarchyLevelPosition"] = 3
+            elif re.search(r'\b(?:root\s*(?:level|tasks?|items?)?|top\s*level|level\s*1|first\s*level|1st\s*level)\b', user_text_lower):
+                filter_data["hierarchyLevelPosition"] = 1
+            else:
+                lvl_match = re.search(
+                    r'\b(projects?|epics?|initiatives?|milestones?|stories|story|sub[-\s]?tasks?)\b',
+                    user_text_lower,
+                )
+                if lvl_match and not re.search(r'\b(?:of|under|in)\s+(?:the\s+)?(?:[A-Za-z0-9_-]+\s+)?project\b', user_text_lower):
+                    raw_lvl = lvl_match.group(1).strip().lower().replace('-', '').replace(' ', '')
+                    lvl_map = {
+                        "project": "Project", "projects": "Project",
+                        "epic": "Epic", "epics": "Epic",
+                        "initiative": "Initiative", "initiatives": "Initiative",
+                        "milestone": "Milestone", "milestones": "Milestone",
+                        "story": "Story", "stories": "Story",
+                        "subtask": "Subtask", "subtasks": "Subtask",
+                    }
+                    if raw_lvl in lvl_map:
+                        filter_data["hierarchyLevelName"] = lvl_map[raw_lvl]
+
         # Refresh has_filter_criteria after deterministic extraction
         has_filter_criteria = bool(
             has_filter_criteria
@@ -328,6 +409,8 @@ def make_extract_mutation_node(llm):
             or filter_data.get("status")
             or filter_data.get("assignee")
             or filter_data.get("query")
+            or filter_data.get("hierarchyLevelName")
+            or filter_data.get("hierarchyLevelPosition")
         )
         if not user_msg_codes and has_filter_criteria:
             targets = []
@@ -441,6 +524,8 @@ def make_extract_mutation_node(llm):
             or filter_data.get("dept")
             or filter_data.get("department")
             or filter_data.get("query")
+            or filter_data.get("hierarchyLevelName")
+            or filter_data.get("hierarchyLevelPosition")
         )
         if not user_msg_codes and has_any_filter:
             targets = []
@@ -457,7 +542,10 @@ def make_extract_mutation_node(llm):
                     if _is_valid_title_candidate(candidate_name):
                         filter_data["query"] = candidate_name
 
-        is_children_scope = bool(re.search(r'\b(?:all\s+)?(?:child(?:ren)?|subtasks?|tasks?)\s+of\b', user_msg, re.IGNORECASE))
+        is_children_scope = bool(
+            re.search(r'\b(?:all\s+)?(?:child(?:ren)?|subtasks?|tasks?)\s+of\b', user_msg, re.IGNORECASE)
+            and not filter_data.get("hierarchyLevelPosition")
+        )
 
         summary = extracted_data.get("summary")
         # Discard hallucinated hierarchy refusal summary on non-refused requests
@@ -516,6 +604,8 @@ def make_extract_mutation_node(llm):
                 sev_f = filter_data.get("severity") or filter_data.get("severityName") or filter_data.get("priority")
                 st_f = filter_data.get("status")
                 asg_f = filter_data.get("assignee")
+                lvl_name_f = filter_data.get("hierarchyLevelName")
+                lvl_pos_f = filter_data.get("hierarchyLevelPosition")
                 if sev_f:
                     filter_bits.append(f"{sev_f}-priority")
                 if st_f:
@@ -523,7 +613,16 @@ def make_extract_mutation_node(llm):
                 if asg_f:
                     filter_bits.append(f"assigned to {asg_f}" if str(asg_f).lower() != "unassigned" else "unassigned")
                 filter_label = " ".join(filter_bits)
-                noun = f"{filter_label} {entity_name}s" if filter_label else f"matching {entity_name}s"
+                if lvl_name_f:
+                    lvl_plural = f"{lvl_name_f}s" if not str(lvl_name_f).lower().endswith("s") else str(lvl_name_f)
+                    target_noun = lvl_plural.lower()
+                elif lvl_pos_f == 1:
+                    target_noun = f"root-level {entity_name}s"
+                elif lvl_pos_f:
+                    target_noun = f"level-{lvl_pos_f} {entity_name}s"
+                else:
+                    target_noun = f"{entity_name}s"
+                noun = f"{filter_label} {target_noun}" if filter_label else f"matching {target_noun}"
                 summary = f"I've prepared updates for {noun} — setting {change_desc}. Please review and confirm below."
             elif filter_data.get("query"):
                 summary = f"Which {entity_name} matching \"{filter_data['query']}\" would you like to update?"
@@ -617,6 +716,23 @@ def make_extract_mutation_node(llm):
                 "operator": "ilike",
                 "value": f"%{str(sev_filter).strip()}%"
             })
+
+        # 4b. Hierarchy Level Conditions (Task domain)
+        if is_task:
+            lvl_pos = filter_data.get("hierarchyLevelPosition")
+            lvl_name = filter_data.get("hierarchyLevelName")
+            if lvl_pos is not None:
+                query_conditions.append({
+                    "field": "hierarchyLevelPosition",
+                    "operator": "eq",
+                    "value": int(lvl_pos),
+                })
+            if lvl_name:
+                query_conditions.append({
+                    "field": "hierarchyLevelName",
+                    "operator": "ilike",
+                    "value": str(lvl_name).strip(),
+                })
 
         # 5. Ticket Type Conditions
         type_filter = filter_data.get("ticketType") or filter_data.get("type")

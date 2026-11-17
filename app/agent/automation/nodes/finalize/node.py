@@ -1,25 +1,12 @@
 import time
-import json
-import yaml
-from pathlib import Path
 from typing import Dict, Any
-from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
+from langchain_core.messages import AIMessage
 from app.agent.automation.state import AutomationState
 from app.agent.automation.schema import TicketDraft
 from app.agent.telemetry import record_node_telemetry
 
-_YAML_PATH = Path(__file__).parent / "prompt.yaml"
-try:
-    with open(_YAML_PATH, "r", encoding="utf-8") as f:
-        _CONFIG = yaml.safe_load(f) or {}
-except Exception as e:
-    print(f"[WARN] Failed to load finalize prompt.yaml: {e}")
-    _CONFIG = {}
 
-FINALIZE_PROMPT_TEMPLATE = _CONFIG.get("system_prompt", "Confirm ticket ready.")
-
-
-def make_finalize_node(llm):
+def make_finalize_node(llm=None):
     """
     Creates the finalize node.
     Validates complete draft with Pydantic and generates confirmation message.

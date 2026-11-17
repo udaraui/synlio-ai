@@ -1,5 +1,5 @@
-from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field
+from typing import Optional, List, Dict, Any, Literal
+from pydantic import BaseModel, Field, ConfigDict
 
 class TicketDraft(BaseModel):
     """Structured draft of a ticket aligned 1:1 with CreateTicketDto."""
@@ -126,3 +126,79 @@ class MutationPayload(BaseModel):
     summary: str = Field("", description="Conversational explanation of changes")
     warnings: List[str] = Field(default_factory=list)
     attemptedHierarchyChange: bool = Field(False, description="Flagged if user tried to alter task hierarchy level")
+
+
+class MutationFilterExtraction(BaseModel):
+    """Structured filter criteria extracted from a mutation command."""
+    assignee: Optional[str] = Field(None, description="Source assignee filter (e.g. 'Reshan', 'me', 'Unassigned')")
+    status: Optional[str] = Field(None, description="Source status filter (e.g. 'Open', 'In Progress', 'unresolved')")
+    severity: Optional[str] = Field(None, description="Source severity/priority filter (e.g. 'High', 'Low', 'Medium', 'Critical')")
+    ticketType: Optional[str] = Field(None, description="Source ticket type filter")
+    queue: Optional[str] = Field(None, description="Source queue/department filter")
+    query: Optional[str] = Field(None, description="Title or fuzzy name search string (without trailing words like 'task' or 'ticket')")
+    hierarchyLevelName: Optional[str] = Field(None, description="Configured hierarchy level name when user targets a specific level (e.g. 'Project', 'Epic', 'Milestone', 'Subtask'), null for generic 'tasks'")
+    hierarchyLevelPosition: Optional[int] = Field(None, description="1-based hierarchy level position when specified structurally (1 for root/1st level, 2 for 'child of root' / 'second level' / 'level 2', 3 for 'third level')")
+    all: Optional[bool] = Field(None, description="True if user requested all/every matching items")
+
+
+class MutationChangesExtraction(BaseModel):
+    """Structured target field changes extracted from a mutation command."""
+    name: Optional[str] = Field(None, description="New title/name if renaming")
+    description: Optional[str] = Field(None, description="New description if requested")
+    statusName: Optional[str] = Field(None, description="New status (e.g. 'To Do', 'To Start', 'In Progress', 'In Review', 'Done', 'Closed', 'Open', 'Resolved')")
+    severityName: Optional[str] = Field(None, description="New severity/priority ONLY when changing priority (not when filtering by priority)")
+    ticketTypeName: Optional[str] = Field(None, description="New ticket type (e.g. 'Bug', 'CRN', 'Service Request', 'Maintenance', 'Task')")
+    assigneeName: Optional[str] = Field(None, description="New assignee name (e.g. 'Udara', 'me', 'Unassigned')")
+    queueName: Optional[str] = Field(None, description="New queue/department name")
+    startDate: Optional[str] = Field(None, description="New absolute start date (YYYY-MM-DD)")
+    dueDate: Optional[str] = Field(None, description="New absolute due/end date (YYYY-MM-DD)")
+    startDateOffsetDays: Optional[int] = Field(None, description="Signed day offset for relative start date (e.g. -12 for '12 days before end date', +2 for 'forward by 2 days')")
+    startDateRelativeTo: Optional[Literal["startDate", "dueDate"]] = Field(None, description="Reference field for startDateOffsetDays")
+    dueDateOffsetDays: Optional[int] = Field(None, description="Signed day offset for relative due/end date (e.g. +2 for 'forward by 2 days', +5 for '5 days after start date')")
+    dueDateRelativeTo: Optional[Literal["startDate", "dueDate"]] = Field(None, description="Reference field for dueDateOffsetDays")
+    estimateEffort: Optional[float] = Field(None, description="New effort estimate in hours")
+
+
+class MutationExtractionResult(BaseModel):
+    """Structured LLM output for extract_mutation."""
+    action: Literal["UPDATE_TASK", "UPDATE_TICKET"] = Field("UPDATE_TICKET", description="UPDATE_TASK or UPDATE_TICKET")
+    entityType: Literal["task", "ticket"] = Field("ticket", description="'task' or 'ticket'")
+    targets: List[str] = Field(default_factory=list, description="Explicit item codes only; empty list when using filter criteria")
+    attemptedHierarchyChange: bool = Field(False, description="True only if user explicitly asked to alter task hierarchy level")
+    filter: Optional[MutationFilterExtraction] = Field(None, description="Filter criteria when targeting by attributes or title")
+    changes: MutationChangesExtraction = Field(default_factory=MutationChangesExtraction, description="Requested field updates")
+    summary: str = Field("", description="Concise summary of the prepared update draft")
+
+
+class DeltaDraftItem(BaseModel):
+    """Structured draft item extracted for ticket or task creation/cloning."""
+    model_config = ConfigDict(extra="allow")
+
+    name: Optional[str] = Field(None, description="Title/name of the ticket or task")
+    description: Optional[str] = Field(None, description="Detailed description")
+    entityType: Optional[Literal["ticket", "task"]] = Field(None, description="'ticket' or 'task'")
+    ticketSpaceName: Optional[str] = Field(None, description="Target ticket space name")
+    taskSpaceName: Optional[str] = Field(None, description="Target task space name")
+    ticketTypeName: Optional[str] = Field(None, description="Ticket type (e.g. Bug, Maintenance, Task)")
+    severityName: Optional[str] = Field(None, description="Severity/priority (Critical, High, Medium, Low)")
+    statusName: Optional[str] = Field(None, description="Initial status name")
+    assigneeName: Optional[str] = Field(None, description="Assignee name or 'me'")
+    queueName: Optional[str] = Field(None, description="Target queue name")
+    completionDate: Optional[str] = Field(None, description="Ticket due date (YYYY-MM-DD)")
+    plannedEffort: Optional[float] = Field(None, description="Ticket planned effort in hours")
+    startDate: Optional[str] = Field(None, description="Task start date (YYYY-MM-DD)")
+    dueDate: Optional[str] = Field(None, description="Task due/end date (YYYY-MM-DD)")
+    estimateEffort: Optional[float] = Field(None, description="Task effort estimate in hours")
+    parentTaskName: Optional[str] = Field(None, description="Parent project or task name/code")
+    parentTaskId: Optional[int] = Field(None, description="Parent task ID if known")
+    hierarchyLevelName: Optional[str] = Field(None, description="Hierarchy level name (Project, Task, Subtask)")
+    hierarchyLevelSequence: Optional[int] = Field(None, description="Hierarchy level sequence")
+    sourceTicketCode: Optional[str] = Field(None, description="Source ticket code when cloning")
+    sourceTaskCode: Optional[str] = Field(None, description="Source task/project code when cloning")
+    cloneChildren: Optional[bool] = Field(None, description="Whether to clone child tasks")
+    isCreateNewLevel1: Optional[bool] = Field(None, description="True if creating a new root Level 1 project")
+
+
+class DeltaExtractionResult(BaseModel):
+    """Structured LLM output for extract_delta (supports 1 or more drafts)."""
+    drafts: List[DeltaDraftItem] = Field(default_factory=list, description="List of extracted ticket or task drafts")
