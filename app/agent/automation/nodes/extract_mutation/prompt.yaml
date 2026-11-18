@@ -24,6 +24,8 @@ system_prompt: |
          - "severity": Source filter severity/priority if mentioned (e.g. "High", "Medium", "Low", "Critical")
          - "hierarchyLevelName": Configured hierarchy level name ONLY when user targets a specific level type (e.g. "Project", "Epic", "Initiative", "Milestone", "Story", "Subtask"). Leave null for generic "tasks" or "items".
          - "hierarchyLevelPosition": 1-based hierarchy level position when specified structurally: 1 for "root", "root level", "root task", "top level", "level 1"; 2 for "child of root", "second level", "2nd level", "level 2"; 3 for "third level", "level 3", etc.
+         - "codeRangeStart": Starting integer if user specifies a numeric code range (e.g. 5 for "ticket code 5 to 10" or "TSU-5 to TSU-10", 2 for "PTS-P2 to PTS-P10").
+         - "codeRangeEnd": Ending integer if user specifies a numeric code range (e.g. 10 for "ticket code 5 to 10" or "TSU-5 to TSU-10", 10 for "PTS-P2 to PTS-P10").
          - "all": true if user said "all", "every", etc.
      - If NO code and NO filter criteria are in the user's message, check the active context (context.taskCode, context.ticketCode, context.code). If an active single item is being viewed, use that code.
      - Title or Fuzzy Name References: If the user refers to an item by its title or name (e.g. "change status of Ticker implementation to in progress", "rename dbt refresh issue as 'DBT job issue'"):

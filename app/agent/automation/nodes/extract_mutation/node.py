@@ -200,6 +200,47 @@ def make_extract_mutation_node(llm):
 
         # Deterministic extraction of target status if missed by LLM (strictly from current message, never history)
         user_text_lower = user_msg.lower()
+
+        # Deterministic extraction of numeric code ranges (e.g. "ticket code 5 to 10", "TSU-5 to TSU-10", "PTS-P2 to PTS-P10", "PTS-P7-T1 to 3")
+        range_prefix = None
+        task_range_match = re.search(
+            r'(?<![A-Za-z0-9-])([A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*-[A-Za-z]+)(\d+)\s*(?:to|through|thru|-)\s*(?:\1)?(\d+)\b',
+            user_msg,
+            re.IGNORECASE,
+        )
+        prefixed_range_match = None if task_range_match else re.search(
+            r'(?<![A-Za-z0-9-])([A-Za-z][A-Za-z0-9]{1,9})-(\d+)\s*(?:to|through|thru|-)\s*(?:\1-)?(\d+)\b',
+            user_msg,
+            re.IGNORECASE,
+        )
+        unprefixed_range_match = None if (task_range_match or prefixed_range_match) else re.search(
+            r'\b(?:(?:tickets?|tasks?|items?|projects?)\s+(?:codes?|#|numbers?|nos?\.?)?\s*|codes?\s+)(\d+)\s*(?:to|through|thru|-)\s*(\d+)\b',
+            user_msg,
+            re.IGNORECASE,
+        )
+        active_range_match = task_range_match or prefixed_range_match
+        if active_range_match:
+            range_prefix = active_range_match.group(1).upper()
+            r_start, r_end = int(active_range_match.group(2)), int(active_range_match.group(3))
+            filter_data["codeRangeStart"] = min(r_start, r_end)
+            filter_data["codeRangeEnd"] = max(r_start, r_end)
+        elif unprefixed_range_match:
+            r_start, r_end = int(unprefixed_range_match.group(1)), int(unprefixed_range_match.group(2))
+            filter_data["codeRangeStart"] = min(r_start, r_end)
+            filter_data["codeRangeEnd"] = max(r_start, r_end)
+        elif filter_data.get("codeRangeStart") is not None and filter_data.get("codeRangeEnd") is not None:
+            r_start, r_end = int(filter_data["codeRangeStart"]), int(filter_data["codeRangeEnd"])
+            filter_data["codeRangeStart"] = min(r_start, r_end)
+            filter_data["codeRangeEnd"] = max(r_start, r_end)
+
+        has_code_range = (
+            filter_data.get("codeRangeStart") is not None
+            and filter_data.get("codeRangeEnd") is not None
+        )
+        if has_code_range:
+            targets = []
+            user_msg_codes = []
+
         is_bulk_all = bool(
             re.search(r'\b(?:all|every)\b.*?\b(?:tasks?|tickets?|items?|projects?|bugs?|issues?)\b', user_text_lower)
             or filter_data.get("all")
@@ -209,7 +250,7 @@ def make_extract_mutation_node(llm):
 
         # Check if user message explicitly references an item by title/name when LLM didn't populate filter.query
         title_ref_match = None
-        if not is_bulk_all and not user_msg_codes and not filter_data.get("query"):
+        if not is_bulk_all and not has_code_range and not user_msg_codes and not filter_data.get("query"):
             title_ref_match = re.search(
                 r'\b(?:change\s+status\s+of|update\s+status\s+of|status\s+of|rename|update|move|mark|assign\s+(?:task\s+|ticket\s+)?)\s*([A-Za-z0-9_\s-]+?)\s+(?:to|as|into|status)\b',
                 user_msg,
@@ -255,6 +296,7 @@ def make_extract_mutation_node(llm):
         # Check if user query contains any filter criteria (query, bulk, unassigned, status, severity)
         has_filter_criteria = bool(
             is_bulk_all
+            or has_code_range
             or has_title_reference
             or filter_data.get("query")
             or filter_data.get("status")
@@ -293,13 +335,26 @@ def make_extract_mutation_node(llm):
                 (r'\b(?:to|as|into|set to|mark as|mark|make)\b.*?\bto\s*start\b|\bto-start\b', "To Start"),
                 (r'\b(?:to|as|into|set to|mark as|mark|make)\b.*?\bto\s*do\b|\btodo\b', "To Do"),
                 (r'\b(?:to|as|into|set to|mark as|mark|make)\b.*?\bclosed?\b|\bclose ticket\b', "Closed"),
-                (r'\b(?:to|as|into|set to|mark as|mark|make)\b.*?\bopen\b|\breopen\b', "Open"),
+                (r'\b(?:set\s+status\s+to|change\s+status\s+to|status\s+to|mark\s+(?:as\s+)?|set\s+to|move\s+to|change\s+to)\s+open\b|\breopen\b', "Open"),
                 (r'\b(?:to|as|into|set to|mark as|mark|make)\b.*?\bresolved?\b|\bresolve\b', "Resolved"),
             ]
             for pattern, status_val in status_mappings:
                 if re.search(pattern, user_text_lower):
                     clean_changes["statusName"] = status_val
                     break
+
+        # Deterministic extraction of assigneeName for "assign <person> to <targets>" / "assign <targets> to <person>"
+        if not clean_changes.get("assigneeName") and not clean_changes.get("assignee"):
+            stop_names = {"it", "them", "this", "that", "these", "those", "all", "every", "ticket", "tickets", "task", "tasks", "item", "items", "unassigned"}
+            assign_before_to = re.search(
+                r'\bassign\s+([A-Za-z][A-Za-z.\'-]*(?:\s+[A-Za-z][A-Za-z.\'-]*)?)\s+to\s+(?:all\s+|every\s+|the\s+|tickets?|tasks?|items?|projects?|codes?|[A-Za-z]+-\d+)\b',
+                user_msg,
+                re.IGNORECASE,
+            )
+            if assign_before_to:
+                cand_name = assign_before_to.group(1).strip()
+                if cand_name.lower() not in stop_names:
+                    clean_changes["assigneeName"] = cand_name
 
         # Preserve "To Do" when the user explicitly asked for To Do / TODO rather than To Start
         if re.search(r'\b(?:to\s*do|todo)\b', user_text_lower) and not re.search(r'\bto[-\s]*start\b', user_text_lower):
@@ -409,6 +464,7 @@ def make_extract_mutation_node(llm):
         # Refresh has_filter_criteria after deterministic extraction
         has_filter_criteria = bool(
             has_filter_criteria
+            or has_code_range
             or filter_data.get("severity")
             or filter_data.get("severityName")
             or filter_data.get("status")
@@ -523,10 +579,21 @@ def make_extract_mutation_node(llm):
                 }
                 filter_data["status"] = status_map.get(matched_raw, matched_raw.title())
 
+        # Prevent source status filter ("open" in "all open ticket") from leaking into target changes.statusName
+        if str(filter_data.get("status") or "").strip().lower() == "open":
+            target_st = str(clean_changes.get("statusName") or clean_changes.get("status") or "").strip().lower()
+            if target_st == "open" and not re.search(
+                r'\b(?:set\s+(?:status\s+)?to|change\s+(?:status\s+)?to|mark\s+(?:as\s+)?|move\s+to)\s+open\b|\breopen\b',
+                user_text_lower,
+            ):
+                clean_changes.pop("statusName", None)
+                clean_changes.pop("status", None)
+
         # Defer bulk / filtered resolution without explicit codes to the backend DB query across the entire space
         # (rather than truncating to paginated page-1 items in context).
         has_any_filter = bool(
             is_bulk_all
+            or has_code_range
             or filter_data.get("status")
             or filter_data.get("assignee")
             or filter_data.get("severity")
@@ -626,6 +693,12 @@ def make_extract_mutation_node(llm):
                     filter_bits.append(str(st_f))
                 if asg_f:
                     filter_bits.append(f"assigned to {asg_f}" if str(asg_f).lower() != "unassigned" else "unassigned")
+                if has_code_range:
+                    if range_prefix:
+                        pfx = range_prefix if ("-" in range_prefix and range_prefix[-1].isalpha()) else f"{range_prefix}-"
+                    else:
+                        pfx = ""
+                    filter_bits.append(f"(codes {pfx}{filter_data['codeRangeStart']} to {pfx}{filter_data['codeRangeEnd']})")
                 filter_label = " ".join(filter_bits)
                 if lvl_name_f:
                     lvl_plural = f"{lvl_name_f}s" if not str(lvl_name_f).lower().endswith("s") else str(lvl_name_f)
@@ -748,6 +821,18 @@ def make_extract_mutation_node(llm):
                     "value": str(lvl_name).strip(),
                 })
 
+        # 4c. Numeric Code Range Conditions
+        if has_code_range:
+            query_conditions.append({
+                "field": "codeRange",
+                "operator": "between",
+                "value": {
+                    "prefix": range_prefix,
+                    "start": int(filter_data["codeRangeStart"]),
+                    "end": int(filter_data["codeRangeEnd"]),
+                },
+            })
+
         # 5. Ticket Type Conditions
         type_filter = filter_data.get("ticketType") or filter_data.get("type")
         if type_filter and not is_task:
@@ -778,6 +863,7 @@ def make_extract_mutation_node(llm):
         # Determine Target Scope
         is_bulk = (
             filter_data.get("all") is True
+            or has_code_range
             or bool(re.search(r'\b(?:all|every)\b', user_lower))
             or len(targets) > 1
         )
@@ -804,7 +890,7 @@ def make_extract_mutation_node(llm):
             "status": "READY" if targets else "NEEDS_INPUT",
             "entityType": entity_name,
             "targets": targets,
-            "explicitTargets": bool(user_msg_codes),
+            "explicitTargets": bool(user_msg_codes) and not has_code_range,
             "targetScope": target_scope,
             "includeChildren": is_children_scope,
             "filter": filter_data if filter_data else None,

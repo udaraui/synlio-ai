@@ -138,6 +138,8 @@ class MutationFilterExtraction(BaseModel):
     query: Optional[str] = Field(None, description="Title or fuzzy name search string (without trailing words like 'task' or 'ticket')")
     hierarchyLevelName: Optional[str] = Field(None, description="Configured hierarchy level name when user targets a specific level (e.g. 'Project', 'Epic', 'Milestone', 'Subtask'), null for generic 'tasks'")
     hierarchyLevelPosition: Optional[int] = Field(None, description="1-based hierarchy level position when specified structurally (1 for root/1st level, 2 for 'child of root' / 'second level' / 'level 2', 3 for 'third level')")
+    codeRangeStart: Optional[int] = Field(None, description="Starting numeric code when user specifies a code range (e.g. 5 for 'ticket code 5 to 10' or 'TSU-5 to TSU-10')")
+    codeRangeEnd: Optional[int] = Field(None, description="Ending numeric code when user specifies a code range (e.g. 10 for 'ticket code 5 to 10' or 'TSU-5 to TSU-10')")
     all: Optional[bool] = Field(None, description="True if user requested all/every matching items")
 
 
