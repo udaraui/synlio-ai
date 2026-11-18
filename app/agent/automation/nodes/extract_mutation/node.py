@@ -589,6 +589,23 @@ def make_extract_mutation_node(llm):
                 clean_changes.pop("statusName", None)
                 clean_changes.pop("status", None)
 
+        # Prevent target status ("to In Progress") from leaking into source filter.status
+        f_st = str(filter_data.get("status") or "").strip().lower()
+        t_st = str(clean_changes.get("statusName") or clean_changes.get("status") or "").strip().lower()
+        if f_st and t_st and f_st == t_st:
+            explicit_source_st = re.search(
+                rf'\b(?:in|with|having)\s+(?:status\s+)?{re.escape(f_st)}\b|\b(?:all|every)\s+{re.escape(f_st)}\s+(?:tickets?|tasks?|items?|projects?)\b',
+                user_text_lower,
+            )
+            if not explicit_source_st:
+                filter_data.pop("status", None)
+
+        # If a numeric code range is active, strip any LLM-hallucinated code fragment from filter.query
+        if has_code_range and filter_data.get("query"):
+            q_str = str(filter_data["query"]).strip()
+            if re.match(r'^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+(?:\s*(?:to|through|thru|-)\s*[A-Za-z0-9-]+)?$', q_str, re.IGNORECASE):
+                filter_data.pop("query", None)
+
         # Defer bulk / filtered resolution without explicit codes to the backend DB query across the entire space
         # (rather than truncating to paginated page-1 items in context).
         has_any_filter = bool(
@@ -612,7 +629,7 @@ def make_extract_mutation_node(llm):
             targets = []
 
         # Fuzzy target title / name extraction if no explicit code targets and no structured filter found
-        if not targets and not is_bulk_all:
+        if not targets and not is_bulk_all and not has_code_range:
             fuzzy_name = extracted_data.get("target_name") or extracted_data.get("target_title") or extracted_data.get("target") or filter_data.get("query")
             if fuzzy_name and not filter_data.get("query"):
                 filter_data["query"] = str(fuzzy_name).strip()
